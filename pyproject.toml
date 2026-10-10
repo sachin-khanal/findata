@@ -1,0 +1,45 @@
+[project]
+name = "findata"
+version = "0.1.0"
+description = "Local-first personal finance data layer on Plaid, built for humans and AI agents."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=50.0",
+    "fastapi>=0.141",
+    "plaid-python>=44.0",
+    "pydantic-settings>=2.15",
+    "sqlalchemy>=2.0.54",
+    "typer>=0.27",
+    "uvicorn>=0.53",
+]
+
+[project.scripts]
+findata = "findata.cli:app"
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13",
+    "pytest>=9.1",
+    "ruff>=0.16",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = ["B008"]  # typer/fastapi use call defaults by design
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

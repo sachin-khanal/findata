@@ -1,0 +1,104 @@
+FINDATA - DEVELOPMENT SETUP
+===========================
+
+Written for: developers working on findata locally.
+
+Python environment, dependencies and commands are all managed by uv. You do not
+need to create or activate a virtualenv by hand.
+
+
+1. PREREQUISITES
+----------------
+- uv (https://docs.astral.sh/uv/). It installs Python 3.12 for you if needed.
+- git
+- Free Plaid Sandbox keys: https://dashboard.plaid.com/developers/keys
+  (only needed to talk to Plaid; the test suite needs no keys or network)
+
+
+2. FIRST-TIME SETUP
+-------------------
+  uv sync                      # creates .venv from pyproject.toml + uv.lock
+  cp .env.example .env         # then edit .env, see section 3
+  uv run findata init          # creates ~/.findata (see section 4)
+
+Python version is pinned to 3.12 in .python-version (pyproject requires >=3.12).
+Dependencies are locked in uv.lock. Do not edit it by hand; use "uv add <pkg>"
+(runtime) or "uv add --dev <pkg>" (dev) and commit the updated lock file.
+
+
+3. CONFIGURATION (.env)
+-----------------------
+Settings load from environment variables and an optional .env file in the
+directory you run from. .env is git-ignored. Never commit it.
+
+  PLAID_CLIENT_ID    from the Plaid dashboard
+  PLAID_SECRET       from the Plaid dashboard (use the Sandbox secret)
+  PLAID_ENV          sandbox (default) or production
+  FINDATA_DATA_DIR   optional, default ~/.findata
+  FINDATA_HOST       optional, default 127.0.0.1
+  FINDATA_PORT       optional, default 8765
+
+The server starts without Plaid keys. Routes that need Plaid return 503 until
+they are set. Keep FINDATA_HOST on 127.0.0.1; the API is designed for loopback.
+
+
+4. LOCAL DATA AND SECRETS (~/.findata)
+--------------------------------------
+  findata.db    SQLite database
+  token.key     Fernet key that encrypts Plaid access tokens
+  api.token     random token required by the local HTTP API
+
+The key and token files must be mode 0600. findata refuses to start if they are
+readable by others (fix with: chmod 600 <file>). Never delete token.key while
+findata.db holds linked items, or the stored Plaid tokens become undecryptable.
+Design rationale: docs/adr/0001-local-first-storage-and-secrets.md
+
+To start over with a clean slate, delete the whole directory (or point
+FINDATA_DATA_DIR somewhere else) and run "uv run findata init" again.
+
+
+5. DAILY COMMANDS
+-----------------
+  uv run findata sandbox-link  # link Plaid's test bank and sync it, no browser
+  uv run findata sync          # pull new/changed/removed transactions
+  uv run findata txns          # print recent transactions
+  uv run findata serve         # web UI + API at http://127.0.0.1:8765
+                               # interactive API docs at /docs
+
+Calling the API from a script: send the contents of ~/.findata/api.token in an
+"X-Findata-Token" header. Only /api/health works without it.
+
+
+6. TESTS AND LINTING
+--------------------
+  uv run pytest                      # tests use a fake Plaid gateway
+  uv run ruff check .                # lint
+  uv run ruff format --check .       # formatting (drop --check to fix)
+
+Optional pre-commit hooks (ruff, private-key detection, large-file check,
+whitespace fixes):
+  uvx pre-commit install
+
+CI (.github/workflows/ci.yml) runs "uv sync --locked", ruff check, ruff format
+--check and pytest on pushes to main and on pull requests. Run the same four
+commands locally before opening a PR.
+
+
+7. CODE LAYOUT
+--------------
+  src/findata/config.py          settings
+  src/findata/security.py        key/token files, Fernet encryption
+  src/findata/db.py              SQLAlchemy models and engine
+  src/findata/plaid_gateway.py   the only module that imports plaid-python
+  src/findata/sync.py            cursor-based transactions sync
+  src/findata/api.py             FastAPI app (create_app factory)
+  src/findata/cli.py             "findata" command
+  src/findata/web/index.html     minimal web UI
+  tests/                         pytest suite (conftest.py has the fake gateway)
+
+
+8. NOT USED YET
+---------------
+No Docker/dev container, no Alembic migrations (the schema is created with
+create_all, so schema changes need a fresh DB), and no OS keychain for the
+encryption key. These are on the README roadmap.

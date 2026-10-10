@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Secrets & local data -- never commit
+.env
+.env.*
+!.env.example
+*.key
+*.db
+*.sqlite*
+.findata/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
