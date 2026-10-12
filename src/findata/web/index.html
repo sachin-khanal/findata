@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>findata</title>
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; }
+    button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; cursor: pointer; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #ddd; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    #status { color: #555; margin: 1rem 0; white-space: pre-wrap; }
+    .env { font-size: 12px; padding: 2px 6px; border-radius: 4px; background: #eee; }
+  </style>
+</head>
+<body>
+  <h1>findata <span class="env">__PLAID_ENV__</span></h1>
+  <button id="link">Link an account</button>
+  <button id="sync">Sync</button>
+  <div id="status"></div>
+  <h2>Accounts</h2>
+  <table id="accounts"></table>
+  <h2>Recent transactions</h2>
+  <table id="txns"></table>
+<script>
+const TOKEN = "__FINDATA_TOKEN__";
+const $ = (id) => document.getElementById(id);
+const status = (msg) => { $("status").textContent = msg; };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "Content-Type": "application/json", "X-Findata-Token": TOKEN, ...(opts.headers || {}) },
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail || JSON.stringify(body));
+  return body;
+}
+
+function render(table, headers, rows) {
+  const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  table.innerHTML = "<tr>" + headers.map((h) => `<th>${esc(h)}</th>`).join("") + "</tr>" +
+    rows.map((r) => "<tr>" + r.map((c, i) => `<td class="${i === r.length - 1 ? "num" : ""}">${esc(c)}</td>`).join("") + "</tr>").join("");
+}
+
+async function refresh() {
+  const accounts = await api("/api/accounts");
+  render($("accounts"), ["Name", "Type", "Mask", "Balance"],
+    accounts.map((a) => [a.name, a.subtype || a.type, a.mask, a.current_balance]));
+  const txns = await api("/api/transactions?limit=50");
+  render($("txns"), ["Date", "Name", "Category", "Amount"],
+    txns.map((t) => [t.date, t.merchant_name || t.name, t.category_primary, t.amount]));
+}
+
+async function sync() {
+  status("Syncing…");
+  const results = await api("/api/sync", { method: "POST" });
+  status(results.map((r) => `${r.item_id}: +${r.added} ~${r.modified} -${r.removed} (${r.status})`).join("\n") || "No linked items yet.");
+  await refresh();
+}
+
+$("link").onclick = async () => {
+  try {
+    const { link_token } = await api("/api/link/token", { method: "POST" });
+    Plaid.create({
+      token: link_token,
+      onSuccess: async (public_token) => {
+        const item = await api("/api/link/exchange", { method: "POST", body: JSON.stringify({ public_token }) });
+        status(`Linked ${item.institution_name || item.id}.`);
+        await sync();
+      },
+      onExit: (err) => { if (err) status(`Link exited: ${err.error_message || err.error_code}`); },
+    }).open();
+  } catch (e) { status(e.message); }
+};
+$("sync").onclick = () => sync().catch((e) => status(e.message));
+refresh().catch((e) => status(e.message));
+</script>
+</body>
+</html>
