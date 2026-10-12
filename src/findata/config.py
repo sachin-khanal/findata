@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     findata_data_dir: Path = Path("~/.findata")
     findata_host: str = "127.0.0.1"
     findata_port: int = 8765
+    # Where the master encryption key lives: the OS keychain, an owner-only file, or (auto) the
+    # keychain with a file fallback for headless machines.
+    findata_key_backend: Literal["auto", "keychain", "file"] = "auto"
 
     @property
     def data_dir(self) -> Path:
@@ -31,8 +34,8 @@ class Settings(BaseSettings):
         return self.data_dir / "findata.db"
 
     @property
-    def key_path(self) -> Path:
-        return self.data_dir / "token.key"
+    def master_key_path(self) -> Path:
+        return self.data_dir / "master.key"
 
     @property
     def api_token_path(self) -> Path:

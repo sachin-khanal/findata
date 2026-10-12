@@ -11,6 +11,8 @@ need to create or activate a virtualenv by hand.
 ----------------
 - uv (https://docs.astral.sh/uv/). It installs Python 3.12 for you if needed.
 - git
+- Nothing else to install: SQLCipher (sqlcipher3) and keychain access (keyring) come as
+  prebuilt wheels for macOS, Linux and Windows on x86-64 and arm64.
 - Free Plaid Sandbox keys: https://dashboard.plaid.com/developers/keys
   (only needed to talk to Plaid; the test suite needs no keys or network)
 
@@ -44,14 +46,24 @@ they are set. Keep FINDATA_HOST on 127.0.0.1; the API is designed for loopback.
 
 4. LOCAL DATA AND SECRETS (~/.findata)
 --------------------------------------
-  findata.db    SQLite database
-  token.key     Fernet key that encrypts Plaid access tokens
+  findata.db    SQLCipher-encrypted database (also encrypts its -wal/-shm files)
   api.token     random token required by the local HTTP API
+  master.key    master encryption key, ONLY when no OS keychain is available
+                (otherwise the key lives in the OS keychain, one entry per data dir)
 
-The key and token files must be mode 0600. findata refuses to start if they are
-readable by others (fix with: chmod 600 <file>). Never delete token.key while
-findata.db holds linked items, or the stored Plaid tokens become undecryptable.
-Design rationale: docs/adr/0001-local-first-storage-and-secrets.md
+The data directory must be mode 0700 and the files 0600 (POSIX; on Windows the
+per-user profile ACL applies). findata refuses to start if they are accessible to
+others (fix with: chmod 700 <dir> / chmod 600 <file>).
+
+The master key protects everything. If it is lost, the database cannot be
+recovered, so back it up separately from the data. findata only ever creates a
+new key when no database exists; with a database but no key it stops with an
+error instead. Choose where the key lives with FINDATA_KEY_BACKEND:
+auto (default: keychain, falling back to master.key), keychain, or file.
+Design rationale: docs/adr/0002-layered-encryption-at-rest.md
+
+Databases created before encryption was added are plaintext and are rejected;
+delete the data directory and run "uv run findata init" again.
 
 To start over with a clean slate, delete the whole directory (or point
 FINDATA_DATA_DIR somewhere else) and run "uv run findata init" again.
@@ -87,7 +99,7 @@ commands locally before opening a PR.
 7. CODE LAYOUT
 --------------
   src/findata/config.py          settings
-  src/findata/security.py        key/token files, Fernet encryption
+  src/findata/security.py        master key, key derivation, AES-GCM field encryption
   src/findata/db.py              SQLAlchemy models and engine
   src/findata/plaid_gateway.py   the only module that imports plaid-python
   src/findata/sync.py            cursor-based transactions sync
@@ -99,6 +111,5 @@ commands locally before opening a PR.
 
 8. NOT USED YET
 ---------------
-No Docker/dev container, no Alembic migrations (the schema is created with
-create_all, so schema changes need a fresh DB), and no OS keychain for the
-encryption key. These are on the README roadmap.
+No Docker/dev container and no Alembic migrations (the schema is created with
+create_all, so schema changes need a fresh DB). These are on the README roadmap.
