@@ -21,6 +21,8 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
+from findata.security import create_private_file
+
 
 def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
@@ -118,7 +120,9 @@ def _sqlite_pragmas(dbapi_conn, _record):
 def make_engine(db_path: Path | str) -> Engine:
     url = "sqlite://" if str(db_path) == ":memory:" else f"sqlite:///{db_path}"
     if url != "sqlite://":
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Transaction data is PII: owner-only from creation. SQLite's -wal/-shm files inherit
+        # the main file's mode, so creating it first closes the window a later chmod would leave.
+        create_private_file(Path(db_path))
     kwargs = {"connect_args": {"check_same_thread": False}}
     if url == "sqlite://":
         from sqlalchemy.pool import StaticPool
@@ -126,9 +130,6 @@ def make_engine(db_path: Path | str) -> Engine:
         kwargs["poolclass"] = StaticPool
     engine = create_engine(url, **kwargs)
     Base.metadata.create_all(engine)
-    if url != "sqlite://":
-        # Transaction data is PII: owner-only. SQLite's -wal/-shm files inherit this mode.
-        Path(db_path).chmod(0o600)
     return engine
 
 
