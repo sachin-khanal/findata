@@ -59,9 +59,21 @@ FINDATA_DATA_DIR somewhere else) and run "uv run findata init" again.
 
 5. DAILY COMMANDS
 -----------------
-  uv run findata sandbox-link  # link Plaid's test bank and sync it, no browser
+  uv run findata sandbox-link  # link Plaid's test bank and sync it, no browser; waits until
+                               # Plaid has loaded the full history (usually 10-30 seconds)
   uv run findata sync          # pull new/changed/removed transactions
   uv run findata txns          # print recent transactions
+
+Every command explains what it is doing and what to do next. For scripts, CI and
+agents, add --json to sandbox-link, sync or txns: output is one JSON object per
+line ("event": linking, linked, waiting, poll, done, error, ...).
+
+sandbox-link exit codes: 0 = history fully loaded, 2 = linked but Plaid was still
+loading when the wait ended (nothing lost; run "findata sync" later, or raise
+--timeout), 1 = error (bad keys, Plaid rejected the request, no credentials).
+Plaid reports INITIAL_UPDATE_COMPLETE first, with few or no transactions; the rest
+arrives as HISTORICAL_UPDATE_COMPLETE. "+0 new" with INITIAL_UPDATE_COMPLETE means
+"not ready yet", not "no data".
   uv run findata serve         # web UI + API at http://127.0.0.1:8765
                                # interactive API docs at /docs
 

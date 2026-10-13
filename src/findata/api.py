@@ -8,7 +8,7 @@ from importlib.resources import files
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
@@ -69,6 +69,9 @@ class SyncOut(BaseModel):
     modified: int
     removed: int
     status: str | None
+    # False while Plaid is still loading older transactions: more will arrive on a later sync.
+    history_complete: bool
+    detail: str
 
 
 # ---------- app factory ----------
@@ -128,6 +131,10 @@ def create_app(
             "__PLAID_ENV__", settings.plaid_env
         )
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)  # no icon; avoids a 404 in browser consoles
+
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "plaid_env": settings.plaid_env}
@@ -143,7 +150,10 @@ def create_app(
 
     @app.post("/api/sync", dependencies=auth)
     def sync(session: SessionDep, gw: GatewayDep) -> list[SyncOut]:
-        return [SyncOut(**r.__dict__) for r in sync_all(session, gw, cipher)]
+        return [
+            SyncOut(**r.__dict__, history_complete=r.history_complete, detail=r.detail)
+            for r in sync_all(session, gw, cipher)
+        ]
 
     @app.get("/api/items", dependencies=auth)
     def items(session: SessionDep) -> list[ItemOut]:

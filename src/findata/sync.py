@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,6 +28,19 @@ log = logging.getLogger(__name__)
 
 MUTATION_ERROR = "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION"
 MAX_RESTARTS = 3
+HISTORY_COMPLETE = "HISTORICAL_UPDATE_COMPLETE"
+
+_STATUS_TEXT = {
+    None: "Plaid has not reported a status yet.",
+    "NOT_READY": "Plaid is still preparing this account's transactions.",
+    "INITIAL_UPDATE_COMPLETE": "Recent transactions are loaded; older history is still loading.",
+    HISTORY_COMPLETE: "All available history is loaded.",
+}
+
+
+def describe_status(status: str | None) -> str:
+    """Plain-language meaning of Plaid's transactions_update_status."""
+    return _STATUS_TEXT.get(status, f"Plaid reported status {status}.")
 
 
 @dataclass
@@ -45,6 +60,14 @@ class SyncResult:
     modified: int
     removed: int
     status: str | None
+
+    @property
+    def history_complete(self) -> bool:
+        return self.status == HISTORY_COMPLETE
+
+    @property
+    def detail(self) -> str:
+        return describe_status(self.status)
 
 
 def fetch_delta(gateway: PlaidGateway, access_token: str, cursor: str | None) -> SyncDelta:
@@ -167,3 +190,58 @@ def link_item(
     session.add(item)
     session.commit()
     return item
+
+
+@dataclass(frozen=True)
+class WaitOutcome:
+    """Result of waiting for an Item's history to finish loading, summed over every poll."""
+
+    item_id: str
+    added: int
+    modified: int
+    removed: int
+    status: str | None
+    polls: int
+    elapsed: float
+
+    @property
+    def history_complete(self) -> bool:
+        return self.status == HISTORY_COMPLETE
+
+
+def wait_for_history(
+    session: Session,
+    gateway: PlaidGateway,
+    cipher: TokenCipher,
+    item: Item,
+    *,
+    timeout: float = 120.0,
+    interval: float = 5.0,
+    on_poll: Callable[[int, SyncResult, float], None] | None = None,
+    sleep: Callable[[float], None] | None = None,
+    clock: Callable[[], float] | None = None,
+) -> WaitOutcome:
+    """Sync `item` repeatedly until Plaid reports its full history, or `timeout` passes.
+
+    A freshly linked Item reports INITIAL_UPDATE_COMPLETE with few or no transactions; the
+    rest arrives later, so a single sync is not "done". The wait is bounded and never raises
+    on timeout: the caller inspects `history_complete` and can simply sync again later.
+    """
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    start = clock()
+    added = modified = removed = polls = 0
+    while True:
+        result = sync_item(session, gateway, cipher, item)
+        polls += 1
+        added, modified, removed = (
+            added + result.added,
+            modified + result.modified,
+            removed + result.removed,
+        )
+        elapsed = clock() - start
+        if on_poll:
+            on_poll(polls, result, elapsed)
+        if result.history_complete or elapsed + interval > timeout:
+            return WaitOutcome(item.id, added, modified, removed, result.status, polls, elapsed)
+        sleep(interval)

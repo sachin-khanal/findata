@@ -11,7 +11,12 @@
     table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
     th, td { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid #ddd; }
     td.num { text-align: right; font-variant-numeric: tabular-nums; }
-    #status { color: #555; margin: 1rem 0; white-space: pre-wrap; }
+    #status { color: #555; margin: 1rem 0; white-space: pre-wrap; padding: .5rem .75rem; border-left: 4px solid #bbb; background: #f6f6f6; }
+    #status[data-state="working"], #status[data-state="waiting"] { border-color: #d89b00; }
+    #status[data-state="ok"] { border-color: #2e8b57; }
+    #status[data-state="error"] { border-color: #c0392b; color: #8e1b0f; }
+    .empty { color: #777; font-style: italic; margin: .5rem 0; }
+    button:disabled { cursor: progress; opacity: .6; }
     .env { font-size: 12px; padding: 2px 6px; border-radius: 4px; background: #eee; }
   </style>
 </head>
@@ -19,15 +24,25 @@
   <h1>findata <span class="env">__PLAID_ENV__</span></h1>
   <button id="link">Link an account</button>
   <button id="sync">Sync</button>
-  <div id="status"></div>
+  <div id="status" role="status" aria-live="polite" data-state="idle">Ready. Link an account to get started.</div>
   <h2>Accounts</h2>
   <table id="accounts"></table>
+  <p id="accounts-empty" class="empty" hidden>No accounts yet. Click "Link an account".</p>
   <h2>Recent transactions</h2>
   <table id="txns"></table>
+  <p id="txns-empty" class="empty" hidden>No transactions yet. After you link an account, Plaid can take a minute to load it; this page keeps checking and tells you what it is waiting for.</p>
 <script>
 const TOKEN = "__FINDATA_TOKEN__";
 const $ = (id) => document.getElementById(id);
-const status = (msg) => { $("status").textContent = msg; };
+// state: idle | working | waiting | ok | error. Exposed as data-state so scripts and headless
+// browsers can tell what the page is doing without parsing the message text.
+const status = (msg, state = "idle") => {
+  $("status").textContent = msg;
+  $("status").dataset.state = state;
+};
+const busy = (on) => { $("link").disabled = on; $("sync").disabled = on; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const POLL_MS = 5000, MAX_POLLS = 24;  // keep checking up to 2 minutes while Plaid loads history
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -49,34 +64,63 @@ async function refresh() {
   const accounts = await api("/api/accounts");
   render($("accounts"), ["Name", "Type", "Mask", "Balance"],
     accounts.map((a) => [a.name, a.subtype || a.type, a.mask, a.current_balance]));
+  $("accounts-empty").hidden = accounts.length > 0;
+  $("accounts").hidden = accounts.length === 0;
   const txns = await api("/api/transactions?limit=50");
   render($("txns"), ["Date", "Name", "Category", "Amount"],
     txns.map((t) => [t.date, t.merchant_name || t.name, t.category_primary, t.amount]));
+  $("txns-empty").hidden = txns.length > 0;
+  $("txns").hidden = txns.length === 0;
 }
 
+const summarize = (results) => results.map((r) =>
+  `${r.item_id}: +${r.added} new, ${r.modified} changed, ${r.removed} removed. ${r.detail}`).join("\n");
+
+// Sync, and while Plaid is still loading older history keep checking so the user never has to
+// guess whether "0 new" means "done" or "not ready yet".
 async function sync() {
-  status("Syncing…");
-  const results = await api("/api/sync", { method: "POST" });
-  status(results.map((r) => `${r.item_id}: +${r.added} ~${r.modified} -${r.removed} (${r.status})`).join("\n") || "No linked items yet.");
-  await refresh();
+  busy(true);
+  try {
+    for (let attempt = 1; ; attempt++) {
+      status(attempt === 1 ? "Syncing…" : `Checking Plaid again (${attempt}/${MAX_POLLS})…`, "working");
+      const results = await api("/api/sync", { method: "POST" });
+      await refresh();
+      if (!results.length) { status("No linked items yet. Click \"Link an account\".", "idle"); return; }
+      if (results.every((r) => r.history_complete)) { status(summarize(results), "ok"); return; }
+      if (attempt >= MAX_POLLS) {
+        status(summarize(results) + "\n\nPlaid is still loading history. Nothing is lost: click Sync again in a minute or two.", "waiting");
+        return;
+      }
+      status(summarize(results) + `\n\nPlaid is still loading history. Checking again in ${POLL_MS / 1000}s…`, "waiting");
+      await sleep(POLL_MS);
+    }
+  } catch (e) {
+    status(`Sync failed: ${e.message}`, "error");
+  } finally { busy(false); }
 }
 
 $("link").onclick = async () => {
   try {
+    status("Opening Plaid Link…", "working");
     const { link_token } = await api("/api/link/token", { method: "POST" });
     Plaid.create({
       token: link_token,
       onSuccess: async (public_token) => {
-        const item = await api("/api/link/exchange", { method: "POST", body: JSON.stringify({ public_token }) });
-        status(`Linked ${item.institution_name || item.id}.`);
-        await sync();
+        try {
+          status("Bank login accepted. Saving the connection…", "working");
+          const item = await api("/api/link/exchange", { method: "POST", body: JSON.stringify({ public_token }) });
+          status(`Linked ${item.institution_name || item.id}. Loading transactions…`, "working");
+          await sync();
+        } catch (e) { status(`Linking failed: ${e.message}`, "error"); }
       },
-      onExit: (err) => { if (err) status(`Link exited: ${err.error_message || err.error_code}`); },
+      onExit: (err) => status(err
+        ? `Link closed with an error (${err.error_code || "unknown"}): ${err.error_message || ""}`
+        : "Link closed without connecting an account.", err ? "error" : "idle"),
     }).open();
-  } catch (e) { status(e.message); }
+  } catch (e) { status(`Could not start Plaid Link: ${e.message}`, "error"); }
 };
-$("sync").onclick = () => sync().catch((e) => status(e.message));
-refresh().catch((e) => status(e.message));
+$("sync").onclick = () => sync();
+refresh().catch((e) => status(`Could not load data: ${e.message}`, "error"));
 </script>
 </body>
 </html>
