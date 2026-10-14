@@ -79,33 +79,59 @@ def sandbox_link(
     timeout: float = typer.Option(120.0, min=0, help="Max seconds to wait for history to load."),
     interval: float = typer.Option(5.0, min=0.5, help="Seconds between checks while waiting."),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for Plaid to finish loading."),
+    new: bool = typer.Option(
+        False, "--new", help="Link another Item even if the Sandbox bank is already linked."
+    ),
     as_json: bool = JsonOpt,
 ) -> None:
     """Link a Sandbox test bank (no browser) and sync it, waiting until history has loaded.
 
+    If the Sandbox bank is already linked it is reused (each link would otherwise create a
+    duplicate Item at Plaid); pass --new to link another anyway.
+
     Exit codes: 0 history fully loaded, 2 linked but still loading when the wait ended
     (run `findata sync` later), 1 error.
     """
-    from findata.plaid_gateway import PlaidError
+    from sqlalchemy import select
+
+    from findata.db import Item
+    from findata.plaid_gateway import SANDBOX_INSTITUTION_ID, PlaidError
     from findata.sync import link_item, sync_item, wait_for_history
 
     _, session_factory, gateway, cipher = _connect(as_json)
     try:
         with session_factory() as session:
-            _emit(
-                as_json,
-                f"Linking Plaid Sandbox test user {username!r}…",
-                event="linking",
-                username=username,
-            )
-            item = link_item(session, gateway, cipher, gateway.sandbox_public_token(username))
-            _emit(
-                as_json,
-                f"Linked {item.institution_name} (item {item.id}).",
-                event="linked",
-                item_id=item.id,
-                institution=item.institution_name,
-            )
+            item = None
+            if not new:
+                item = session.scalars(
+                    select(Item)
+                    .where(Item.institution_id == SANDBOX_INSTITUTION_ID)
+                    .order_by(Item.created_at)
+                ).first()
+            if item is not None:
+                _emit(
+                    as_json,
+                    f"{item.institution_name} is already linked (item {item.id}); reusing it. "
+                    "Use --new to link another, or `findata items rm` to remove it.",
+                    event="reused",
+                    item_id=item.id,
+                    institution=item.institution_name,
+                )
+            else:
+                _emit(
+                    as_json,
+                    f"Linking Plaid Sandbox test user {username!r}…",
+                    event="linking",
+                    username=username,
+                )
+                item = link_item(session, gateway, cipher, gateway.sandbox_public_token(username))
+                _emit(
+                    as_json,
+                    f"Linked {item.institution_name} (item {item.id}).",
+                    event="linked",
+                    item_id=item.id,
+                    institution=item.institution_name,
+                )
             if not wait:
                 r = sync_item(session, gateway, cipher, item)
                 _emit(
@@ -174,6 +200,93 @@ def sandbox_link(
         polls=out.polls,
     )
     raise typer.Exit(2)
+
+
+items_app = typer.Typer(no_args_is_help=True, help="List and remove linked bank connections.")
+app.add_typer(items_app, name="items")
+
+
+@items_app.command("list")
+def items_list(as_json: bool = JsonOpt) -> None:
+    """Show linked items with their account and transaction counts."""
+    from sqlalchemy import func, select
+
+    from findata.db import Account, Item, Transaction
+
+    _, session_factory, _, _ = _connect(as_json)
+    with session_factory() as session:
+        rows = session.execute(
+            select(
+                Item,
+                select(func.count())
+                .select_from(Account)
+                .where(Account.item_id == Item.id)
+                .scalar_subquery(),
+                select(func.count())
+                .select_from(Transaction)
+                .join(Account, Account.id == Transaction.account_id)
+                .where(Account.item_id == Item.id)
+                .scalar_subquery(),
+            ).order_by(Item.created_at)
+        ).all()
+    if not rows:
+        _emit(as_json, "No linked items.", event="items", items=[])
+        return
+    for item, accounts, txns in rows:
+        _emit(
+            as_json,
+            f"{item.id}  {item.institution_name or '-'}  {accounts} accounts, {txns} transactions",
+            event="item",
+            item_id=item.id,
+            institution=item.institution_name,
+            accounts=accounts,
+            transactions=txns,
+        )
+
+
+@items_app.command("rm")
+def items_rm(
+    item_id: str = typer.Argument(..., help="Item id, or a unique prefix of it."),
+    local_only: bool = typer.Option(
+        False, "--local-only", help="Skip revoking at Plaid; only delete the local copy."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation."),
+    as_json: bool = JsonOpt,
+) -> None:
+    """Revoke an item at Plaid (/item/remove) and delete it and its data locally."""
+    from sqlalchemy import select
+
+    from findata.db import Item
+    from findata.plaid_gateway import PlaidError
+    from findata.sync import remove_item
+
+    _, session_factory, gateway, cipher = _connect(as_json)
+    with session_factory() as session:
+        matches = session.scalars(select(Item).where(Item.id.startswith(item_id))).all()
+        if len(matches) != 1:
+            _fail(
+                as_json,
+                f"{len(matches)} items match {item_id!r}; run `findata items list` and use a "
+                "unique id prefix."
+                if matches
+                else f"No item matches {item_id!r}.",
+                error_code="NO_UNIQUE_MATCH",
+            )
+        item = matches[0]
+        if not yes and not as_json:
+            typer.confirm(
+                f"Remove {item.institution_name} ({item.id}) and all its local data?", abort=True
+            )
+        try:
+            remove_item(session, gateway, cipher, item, local_only=local_only)
+        except PlaidError as exc:
+            _fail(
+                as_json,
+                f"Plaid rejected the removal ({exc.error_code}): {exc}. Nothing was deleted "
+                "locally; fix the cause or retry with --local-only.",
+                error_code=exc.error_code,
+            )
+    _emit(as_json, f"Removed {item_id}.", event="removed", item_id=item_id)
 
 
 @app.command()

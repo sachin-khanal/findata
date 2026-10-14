@@ -17,6 +17,7 @@ cp .env.example .env         # add PLAID_CLIENT_ID and PLAID_SECRET (Sandbox)
 uv run findata init          # creates ~/.findata (key, API token, DB), all owner-only
 uv run findata sandbox-link  # links First Platypus Bank test data, no browser needed
 uv run findata txns          # print recent transactions
+uv run findata items list    # linked banks; `items rm <id>` revokes at Plaid + deletes locally
 uv run findata serve         # web UI + API at http://127.0.0.1:8765
 ```
 

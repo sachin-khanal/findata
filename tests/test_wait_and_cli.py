@@ -7,10 +7,10 @@ from typer.testing import CliRunner
 
 from findata import cli
 from findata.config import Settings
-from findata.db import make_session_factory
+from findata.db import Account, Item, Transaction, make_session_factory
 from findata.plaid_gateway import PlaidError
 from findata.sync import HISTORY_COMPLETE, describe_status, link_item, wait_for_history
-from tests.conftest import FakeGateway, account, txn
+from tests.conftest import ACCESS_TOKEN, FakeGateway, account, txn
 
 
 def page(cursor, status, added=()):
@@ -259,3 +259,84 @@ def test_sync_command_reports_status_per_item(run_cli):
     invoke("sandbox-link", "--interval", "5")
     r = invoke("sync")
     assert "All available history is loaded." in r.output
+
+
+# ---------- duplicate guard and item removal ----------
+
+
+def test_sandbox_link_reuses_existing_item_instead_of_duplicating(run_cli, engine):
+    invoke, holder = run_cli
+    assert "Linked First Platypus Bank" in invoke("sandbox-link", "--interval", "5").output
+    holder["gateway"].sync_calls.clear()
+    r = invoke("sandbox-link", "--interval", "5")
+    assert r.exit_code == 0 and "already linked" in r.output and "--new" in r.output
+    j = invoke("sandbox-link", "--json", "--interval", "5")
+    assert [json.loads(line)["event"] for line in j.output.splitlines()][:2] == [
+        "reused",
+        "waiting",
+    ]
+    with make_session_factory(engine)() as s:
+        assert s.query(Item).count() == 1
+
+
+def test_sandbox_link_new_flag_links_another(run_cli, engine):
+    invoke, holder = run_cli
+    invoke("sandbox-link", "--interval", "5")
+    # A second Item at Plaid has its own item id and its own accounts/transactions.
+    second = FakeGateway(
+        {
+            None: {
+                **page("d1", HISTORY_COMPLETE, added=[txn("u1", account_id="acc_2")]),
+                "accounts": [account("acc_2")],
+            },
+            "d1": page("d1", HISTORY_COMPLETE),
+        }
+    )
+    second.exchange_public_token = lambda t: ("item_2", ACCESS_TOKEN)
+    holder["gateway"] = second
+    r = invoke("sandbox-link", "--new", "--interval", "5")
+    assert r.exit_code == 0 and "already linked" not in r.output
+    with make_session_factory(engine)() as s:
+        assert s.query(Item).count() == 2
+
+
+def test_items_list_and_rm_revoke_at_plaid_then_delete_locally(run_cli, engine):
+    invoke, holder = run_cli
+    invoke("sandbox-link", "--interval", "5")
+    listing = invoke("items", "list", "--json")
+    ev = json.loads(listing.output.splitlines()[0])
+    assert ev["item_id"] == "item_1" and ev["accounts"] == 1 and ev["transactions"] == 2
+
+    assert invoke("items", "rm", "nope", "--yes").exit_code == 1
+    r = invoke("items", "rm", "item_", "--yes")  # unique prefix
+    assert r.exit_code == 0 and "Removed" in r.output
+    assert holder["gateway"].removed_tokens == [ACCESS_TOKEN]
+    with make_session_factory(engine)() as s:
+        assert (s.query(Item).count(), s.query(Account).count(), s.query(Transaction).count()) == (
+            0,
+            0,
+            0,
+        )
+    assert "No linked items" in invoke("items", "list").output
+
+
+def test_items_rm_keeps_local_data_when_plaid_refuses(run_cli, engine):
+    invoke, holder = run_cli
+    invoke("sandbox-link", "--interval", "5")
+    holder["gateway"].remove_error = PlaidError("RATE_LIMIT_EXCEEDED", "slow down", 429)
+    r = invoke("items", "rm", "item_1", "--yes")
+    assert r.exit_code == 1 and "Nothing was deleted" in r.output
+    with make_session_factory(engine)() as s:
+        assert s.query(Item).count() == 1
+    assert invoke("items", "rm", "item_1", "--yes", "--local-only").exit_code == 0
+    with make_session_factory(engine)() as s:
+        assert s.query(Item).count() == 0
+
+
+def test_items_rm_treats_item_not_found_as_already_revoked(run_cli, engine):
+    invoke, holder = run_cli
+    invoke("sandbox-link", "--interval", "5")
+    holder["gateway"].remove_error = PlaidError("ITEM_NOT_FOUND", "gone", 400)
+    assert invoke("items", "rm", "item_1", "--yes").exit_code == 0
+    with make_session_factory(engine)() as s:
+        assert s.query(Item).count() == 0

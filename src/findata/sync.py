@@ -203,6 +203,30 @@ def link_item(
     return item
 
 
+def remove_item(
+    session: Session,
+    gateway: PlaidGateway,
+    cipher: FieldCipher,
+    item: Item,
+    *,
+    local_only: bool = False,
+) -> None:
+    """Revoke `item` at Plaid, then delete it and its accounts/transactions locally.
+
+    Plaid first: if that fails the local rows stay, so the token is never orphaned. An Item
+    Plaid no longer knows (ITEM_NOT_FOUND) is already revoked, so local cleanup proceeds.
+    `local_only` skips the Plaid call (e.g. Sandbox data that was reset on Plaid's side).
+    """
+    if not local_only:
+        try:
+            gateway.item_remove(cipher.decrypt(item.access_token_enc, token_context(item.id)))
+        except PlaidError as exc:
+            if exc.error_code != "ITEM_NOT_FOUND":
+                raise
+    session.delete(item)
+    session.commit()
+
+
 @dataclass(frozen=True)
 class WaitOutcome:
     """Result of waiting for an Item's history to finish loading, summed over every poll."""

@@ -96,6 +96,21 @@ def test_never_mints_new_key_for_existing_database(settings):
     assert not settings.master_key_path.exists()
 
 
+def test_pre_encryption_data_dir_gets_a_specific_message(settings):
+    """A plaintext SQLite file plus the old Fernet token.key is not 'restore your key'."""
+    import sqlite3
+
+    settings.data_dir.mkdir(parents=True, mode=0o700)
+    sqlite3.connect(settings.db_path).close()
+    with sqlite3.connect(settings.db_path) as c:
+        c.execute("create table t (x)")
+    (settings.data_dir / "token.key").write_text("legacy")
+    with pytest.raises(RuntimeError, match="before encryption at rest") as exc:
+        load_or_create_master_key(settings)
+    assert "findata sandbox-link" in str(exc.value)
+    assert not settings.master_key_path.exists()  # never mints a key over legacy data
+
+
 # ---------- master key: keychain backend ----------
 
 

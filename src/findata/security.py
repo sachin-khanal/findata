@@ -209,6 +209,17 @@ def _keyring_set(account: str, value: str) -> None:
         raise KeychainUnavailableError(str(exc)) from exc
 
 
+def _is_legacy_layout(settings: Settings) -> bool:
+    """True for a pre-encryption data dir: a plaintext SQLite file (SQLCipher files have no
+    readable header) or the old Fernet `token.key` beside the database."""
+    try:
+        with settings.db_path.open("rb") as fh:
+            plaintext = fh.read(16).startswith(b"SQLite format 3")
+    except OSError:
+        plaintext = False
+    return plaintext or (settings.data_dir / "token.key").exists()
+
+
 def load_or_create_master_key(settings: Settings) -> bytes:
     """Find the master key (keychain, then file) or create one in the best available place.
 
@@ -234,6 +245,14 @@ def load_or_create_master_key(settings: Settings) -> bytes:
     if backend in ("auto", "file") and key_file.exists():
         return _decode(read_secret_file(key_file), str(key_file))
 
+    if settings.db_path.exists() and _is_legacy_layout(settings):
+        raise RuntimeError(
+            f"{settings.db_path} was created by a version before encryption at rest "
+            "(plaintext SQLite with a Fernet token.key) and cannot be opened. There is no "
+            "migration. If it only holds Sandbox data, move or delete it "
+            f"(rm -r {settings.data_dir}), then run `findata init` and `findata sandbox-link` "
+            "again. If it holds real data, keep it and open it with the old version."
+        )
     if settings.db_path.exists():
         raise RuntimeError(
             f"{settings.db_path} exists but its master key was not found "
