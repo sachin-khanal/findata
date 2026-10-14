@@ -1,6 +1,6 @@
 # ADR 0001: Local-first storage and secret handling
 
-- **Status:** Accepted
+- **Status:** Accepted. Token encryption and key storage superseded by [ADR 0002](0002-layered-encryption-at-rest.md)
 - **Date:** 2026-09-23
 
 ## Context

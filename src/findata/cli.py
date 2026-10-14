@@ -15,28 +15,24 @@ app = typer.Typer(no_args_is_help=True, help="Local-first personal finance data 
 def _deps():
     from findata.db import make_engine, make_session_factory
     from findata.plaid_gateway import PlaidClient
-    from findata.security import TokenCipher
+    from findata.security import load_keys
 
     settings = get_settings()
-    engine = make_engine(settings.db_path)
-    return (
-        settings,
-        make_session_factory(engine),
-        PlaidClient(settings),
-        TokenCipher.from_key_file(settings.key_path),
-    )
+    keys = load_keys(settings)
+    engine = make_engine(settings.db_path, keys.db_key)
+    return settings, make_session_factory(engine), PlaidClient(settings), keys.cipher
 
 
 @app.command()
 def init() -> None:
-    """Create the data directory, encryption key, local API token and database."""
+    """Create the data directory, master encryption key, local API token and database."""
     from findata.db import make_engine
-    from findata.security import TokenCipher, load_or_create_api_token
+    from findata.security import load_keys, load_or_create_api_token
 
     s = get_settings()
-    TokenCipher.from_key_file(s.key_path)
+    keys = load_keys(s)
     load_or_create_api_token(s.api_token_path)
-    make_engine(s.db_path)
+    make_engine(s.db_path, keys.db_key)
     typer.echo(f"Initialized {s.data_dir}")
 
 
@@ -235,9 +231,10 @@ def txns(
     from sqlalchemy import select
 
     from findata.db import Transaction, make_engine, make_session_factory
+    from findata.security import load_keys
 
     s = get_settings()
-    with make_session_factory(make_engine(s.db_path))() as session:
+    with make_session_factory(make_engine(s.db_path, load_keys(s).db_key))() as session:
         rows = list(
             session.scalars(
                 select(Transaction).order_by(Transaction.date.desc(), Transaction.id).limit(limit)

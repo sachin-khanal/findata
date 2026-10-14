@@ -18,7 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from findata.config import Settings, get_settings
 from findata.db import Account, Item, Transaction, make_engine, make_session_factory
 from findata.plaid_gateway import PlaidClient, PlaidError, PlaidGateway
-from findata.security import TokenCipher, load_or_create_api_token
+from findata.security import load_keys, load_or_create_api_token
 from findata.sync import link_item, sync_all
 
 TOKEN_HEADER = "X-Findata-Token"  # noqa: S105 (header name, not a secret)
@@ -83,9 +83,10 @@ def create_app(
     engine: Engine | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
-    engine = engine or make_engine(settings.db_path)
+    keys = load_keys(settings)
+    engine = engine or make_engine(settings.db_path, keys.db_key)
     session_factory = make_session_factory(engine)
-    cipher = TokenCipher.from_key_file(settings.key_path)
+    cipher = keys.cipher
     api_token = load_or_create_api_token(settings.api_token_path)
     _gateway: list[PlaidGateway | None] = [gateway]
 

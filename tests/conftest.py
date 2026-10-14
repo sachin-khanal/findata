@@ -8,7 +8,7 @@ import pytest
 from findata.config import Settings
 from findata.db import make_engine, make_session_factory
 from findata.plaid_gateway import PlaidError
-from findata.security import TokenCipher
+from findata.security import Keys, load_keys
 
 ACCESS_TOKEN = "access-sandbox-SECRET-123"
 
@@ -87,13 +87,19 @@ def settings(tmp_path) -> Settings:
         plaid_client_id="test",
         plaid_secret="test",
         findata_data_dir=tmp_path / "data",
+        findata_key_backend="file",  # never touch the developer's real OS keychain in tests
         _env_file=None,
     )
 
 
 @pytest.fixture
-def engine():
-    return make_engine(":memory:")
+def keys(settings) -> Keys:
+    return load_keys(settings)
+
+
+@pytest.fixture
+def engine(keys):
+    return make_engine(":memory:", keys.db_key)
 
 
 @pytest.fixture
@@ -103,5 +109,5 @@ def session(engine):
 
 
 @pytest.fixture
-def cipher(settings) -> TokenCipher:
-    return TokenCipher.from_key_file(settings.key_path)
+def cipher(keys):
+    return keys.cipher

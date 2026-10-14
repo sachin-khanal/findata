@@ -8,9 +8,11 @@ requires-python = ">=3.12"
 dependencies = [
     "cryptography>=50.0",
     "fastapi>=0.141",
+    "keyring>=25.7.0",
     "plaid-python>=44.0",
     "pydantic-settings>=2.15",
     "sqlalchemy>=2.0.54",
+    "sqlcipher3>=0.6.3",
     "typer>=0.27",
     "uvicorn>=0.53",
 ]
