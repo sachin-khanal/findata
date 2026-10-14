@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from findata.db import Account, Item, Transaction
@@ -214,10 +214,12 @@ class WaitOutcome:
     status: str | None
     polls: int
     elapsed: float
+    settled: bool = False
 
     @property
     def history_complete(self) -> bool:
-        return self.status == HISTORY_COMPLETE
+        """Plaid said complete AND the last pass changed nothing (see wait_for_history)."""
+        return self.settled
 
 
 def wait_for_history(
@@ -235,8 +237,12 @@ def wait_for_history(
     """Sync `item` repeatedly until Plaid reports its full history, or `timeout` passes.
 
     A freshly linked Item reports INITIAL_UPDATE_COMPLETE with few or no transactions; the
-    rest arrives later, so a single sync is not "done". The wait is bounded and never raises
-    on timeout: the caller inspects `history_complete` and can simply sync again later.
+    rest arrives later, so a single sync is not "done". Plaid can also report
+    HISTORICAL_UPDATE_COMPLETE a pass before the last rows land (and keep editing recent ones),
+    so the status alone is not trusted: the wait ends only on a pass that reports complete and
+    adds, modifies and removes nothing, once the Item's accounts are known. The wait is bounded
+    and never raises on timeout: the caller inspects `history_complete` and can simply sync
+    again later.
     """
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
@@ -253,6 +259,15 @@ def wait_for_history(
         elapsed = clock() - start
         if on_poll:
             on_poll(polls, result, elapsed)
-        if result.history_complete or elapsed + interval > timeout:
-            return WaitOutcome(item.id, added, modified, removed, result.status, polls, elapsed)
+        quiet = not (result.added or result.modified or result.removed)
+        has_accounts = bool(
+            session.scalar(
+                select(func.count()).select_from(Account).where(Account.item_id == item.id)
+            )
+        )
+        settled = result.history_complete and quiet and has_accounts
+        if settled or elapsed + interval > timeout:
+            return WaitOutcome(
+                item.id, added, modified, removed, result.status, polls, elapsed, settled
+            )
         sleep(interval)

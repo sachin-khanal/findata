@@ -75,13 +75,14 @@ def test_waits_through_initial_update_until_history_arrives(session, cipher, ite
         sleep=clock.sleep,
         clock=clock.monotonic,
     )
-    assert out.history_complete and out.added == 2 and out.polls == 3
+    assert out.history_complete and out.added == 2 and out.polls == 4
     assert polls == [
         (1, "INITIAL_UPDATE_COMPLETE", 0),  # the exact state that used to end the wait early
         (2, "INITIAL_UPDATE_COMPLETE", 0),
-        (3, HISTORY_COMPLETE, 2),
+        (3, HISTORY_COMPLETE, 2),  # reported complete, but it still added rows: keep going
+        (4, HISTORY_COMPLETE, 0),  # a quiet complete pass: settled
     ]
-    assert clock.sleeps == [5, 5]
+    assert clock.sleeps == [5, 5, 5]
 
 
 def test_timeout_returns_incomplete_instead_of_raising(session, cipher, item):
@@ -104,11 +105,54 @@ def test_totals_accumulate_across_polls(session, cipher, item):
         {
             None: page("c1", "INITIAL_UPDATE_COMPLETE", added=[txn("t1")]),
             "c1": page("c2", HISTORY_COMPLETE, added=[txn("t2"), txn("t3")]),
+            "c2": page("c2", HISTORY_COMPLETE),
         }
     )
     clock = Clock()
     out = wait_for_history(session, gw, cipher, item, sleep=clock.sleep, clock=clock.monotonic)
-    assert out.added == 3 and out.polls == 2
+    assert out.added == 3 and out.polls == 3
+
+
+def test_complete_status_with_more_rows_arriving_is_not_settled(session, cipher, item):
+    """Live Plaid sandbox: COMPLETE came back with 316 rows, then the next sync added 15 more."""
+    gw = FakeGateway(
+        {
+            None: page("c1", "INITIAL_UPDATE_COMPLETE"),
+            "c1": page("c2", HISTORY_COMPLETE, added=[txn("t1")]),
+            "c2": page("c3", HISTORY_COMPLETE, added=[txn("t2")]),
+            "c3": page("c3", HISTORY_COMPLETE),
+        }
+    )
+    clock = Clock()
+    out = wait_for_history(session, gw, cipher, item, sleep=clock.sleep, clock=clock.monotonic)
+    assert out.history_complete and out.added == 2 and out.polls == 4
+
+
+def test_complete_with_no_accounts_yet_is_not_settled(session, cipher, item):
+    """First live run: 'complete' came back with 0 accounts and 0 rows, before Plaid had loaded."""
+    empty = {**page("c1", HISTORY_COMPLETE), "accounts": []}
+    with_data = page("c2", HISTORY_COMPLETE, added=[txn("t1")])
+    gw = FakeGateway(
+        {None: empty, "c1": with_data, "c2": page("c2", HISTORY_COMPLETE)},
+    )
+    clock = Clock()
+    out = wait_for_history(session, gw, cipher, item, sleep=clock.sleep, clock=clock.monotonic)
+    assert out.history_complete and out.added == 1 and out.polls == 3
+
+
+def test_timeout_while_still_changing_is_not_reported_complete(session, cipher, item):
+    gw = FakeGateway(
+        {
+            None: page("c1", HISTORY_COMPLETE, added=[txn("t1")]),
+            "c1": page("c2", HISTORY_COMPLETE, added=[txn("t2")]),
+            "c2": page("c3", HISTORY_COMPLETE, added=[txn("t3")]),
+        }
+    )
+    clock = Clock()
+    out = wait_for_history(
+        session, gw, cipher, item, timeout=7, interval=5, sleep=clock.sleep, clock=clock.monotonic
+    )
+    assert not out.history_complete and out.status == HISTORY_COMPLETE and out.added == 2
 
 
 # ---------- CLI ----------
@@ -152,6 +196,7 @@ def test_sandbox_link_json_is_one_event_per_line(run_cli):
         "poll",
         "poll",
         "poll",
+        "poll",
         "done",
     ]
     assert events[-1] == {
@@ -160,7 +205,7 @@ def test_sandbox_link_json_is_one_event_per_line(run_cli):
         "status": HISTORY_COMPLETE,
         "history_complete": True,
         "timed_out": False,
-        "polls": 3,
+        "polls": 4,
     }
 
 
