@@ -121,6 +121,17 @@ commands locally before opening a PR.
   tests/                         pytest suite (conftest.py has the fake gateway)
 
 
+7b. KNOWN ISSUE: .venv GETS HIDDEN ON macOS (iCloud/Google Drive Desktop folders)
+---------------------------------------------------------------------------------
+If the project lives under ~/Desktop or ~/Documents and those are synced, macOS marks
+dot-prefixed entries (.venv, .git, ...) and everything inside them with the "hidden" flag
+(check with: stat -f '%Sf' .venv). Python skips hidden .pth files, so the editable install
+breaks with "ModuleNotFoundError: No module named 'findata'" or uv reports the venv invalid.
+Fix once: keep the venv outside the synced folder, e.g. in ~/.zshrc
+    export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/findata"
+or move the checkout to an unsynced path like ~/code/findata. Quick repair in place:
+    chflags -R nohidden .venv
+
 8. NOT USED YET
 ---------------
 No Docker/dev container and no Alembic migrations (the schema is created with

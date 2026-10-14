@@ -22,3 +22,6 @@ build/
 .idea/
 .vscode/
 .playwright-mcp/
+
+# Claude Code per-machine settings
+.claude/settings.local.json

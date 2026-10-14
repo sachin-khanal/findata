@@ -8,6 +8,7 @@ e4fd12f  2026-10-12  [feature/encrypted-storage] Add layered encryption at rest:
 197754c  2026-10-13  [fix/sandbox-link-wait]     Fix sandbox-link stopping before Plaid history loads: add wait_for_history, progress output, --json, --timeout/--interval/--no-wait, exit codes, web UI status states.
 be5a49b  2026-10-14  [integrate/encryption-and-wait] Merge feature/encrypted-storage into the sandbox-link wait work; resolve the cli.py txns conflict and move wait_for_history to FieldCipher.
 8ec2dc9  2026-10-14  [integrate/encryption-and-wait] Stop trusting Plaid's COMPLETE status alone in wait_for_history: settle only on a quiet complete pass with accounts present.
+8f5607a  2026-10-14  [integrate/encryption-and-wait] Add changelog.txt and a PostToolUse hook that prompts Claude to append a one-line entry after each git commit.
 
-Uncommitted changes: changelog.txt itself, plus the .claude/ changelog hook (settings.json, hooks/changelog-reminder.sh).
+Uncommitted changes: changelog.txt (this entry for 8f5607a).
 Branch notes: integrate/encryption-and-wait = fix/sandbox-link-wait + feature/encrypted-storage; the two source branches and main are unchanged.
