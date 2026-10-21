@@ -23,9 +23,18 @@ GENERIC_ERROR = "Unexpected error in the daemon; see its log."
 JobFn = Callable[[Callable[[dict], None]], dict]
 
 
-class _Job:
+class JobAlreadyRunning(Exception):
+    """An exclusive job of the same kind is still running; `job_id` is that job."""
+
     def __init__(self, job_id: str) -> None:
+        super().__init__(job_id)
+        self.job_id = job_id
+
+
+class _Job:
+    def __init__(self, job_id: str, exclusive: str | None = None) -> None:
         self.id = job_id
+        self.exclusive = exclusive
         self.state = "running"
         self.events: list[dict] = []
         self.result: dict | None = None
@@ -36,13 +45,25 @@ class JobManager:
         self._max = max_jobs
         self._lock = threading.Lock()
         self._jobs: dict[str, _Job] = {}  # insertion order = age
+        self._exclusive: dict[str, str] = {}  # exclusive key -> id of its running job
 
-    def start(self, fn: JobFn) -> str:
-        job = _Job(secrets.token_urlsafe(8))
+    def start(self, fn: JobFn, *, exclusive: str | None = None) -> str:
+        """Run `fn(emit)` on a worker thread. With `exclusive`, at most one running job may
+        hold that key: the check and the reservation are one atomic step, else JobAlreadyRunning.
+        """
+        job = _Job(secrets.token_urlsafe(8), exclusive)
         with self._lock:
+            if exclusive is not None and exclusive in self._exclusive:
+                raise JobAlreadyRunning(self._exclusive[exclusive])
+            if exclusive is not None:
+                self._exclusive[exclusive] = job.id
             self._jobs[job.id] = job
             self._evict()
-        threading.Thread(target=self._run, args=(job, fn), daemon=True).start()
+        try:
+            threading.Thread(target=self._run, args=(job, fn), daemon=True).start()
+        except BaseException:
+            self._fail(job)
+            raise
         return job.id
 
     def get(self, job_id: str) -> JobOut:
@@ -78,19 +99,29 @@ class JobManager:
                     "error_code": exc.error_code,
                 },
             )
-        except Exception as exc:
+        except BaseException as exc:  # a job must never stay "running" and hold the slot
             logger.error("Job %s failed with %s", job.id, type(exc).__name__)
-            self._finish(
-                job,
-                "failed",
-                None,
-                {"event": "error", "message": GENERIC_ERROR, "error_code": "INTERNAL_ERROR"},
-            )
+            self._fail(job)
         else:
             self._finish(job, "done", result, None)
+        finally:
+            self._fail(job)  # no-op unless nothing above finished the job
+
+    def _fail(self, job: _Job) -> None:
+        """Mark a still-running job failed with the generic event (never the exception text)."""
+        self._finish(
+            job,
+            "failed",
+            None,
+            {"event": "error", "message": GENERIC_ERROR, "error_code": "INTERNAL_ERROR"},
+        )
 
     def _finish(self, job: _Job, state: str, result: dict | None, event: dict | None) -> None:
         with self._lock:
+            if job.state != "running":
+                return
+            if job.exclusive is not None and self._exclusive.get(job.exclusive) == job.id:
+                del self._exclusive[job.exclusive]
             if event is not None:
                 job.events.append(event)
             job.result = result

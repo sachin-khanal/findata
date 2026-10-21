@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -45,6 +46,7 @@ def wait_for_history(
     on_poll: Callable[[int, SyncResult, float], None] | None = None,
     sleep: Callable[[float], None] | None = None,
     clock: Callable[[], float] | None = None,
+    guard: AbstractContextManager | None = None,
 ) -> WaitOutcome:
     """Sync `item` repeatedly until Plaid reports its full history, or `timeout` passes.
 
@@ -57,11 +59,13 @@ def wait_for_history(
     again later.
     """
     sleep = sleep or time.sleep
+    guard = guard if guard is not None else nullcontext()  # e.g. a lock held per pass only
     clock = clock or time.monotonic
     start = clock()
     added = modified = removed = polls = 0
     while True:
-        result = sync_item(session, gateway, cipher, item)
+        with guard:
+            result = sync_item(session, gateway, cipher, item)
         polls += 1
         added, modified, removed = (
             added + result.added,
@@ -72,7 +76,8 @@ def wait_for_history(
         if on_poll:
             on_poll(polls, result, elapsed)
         quiet = not (result.added or result.modified or result.removed)
-        has_accounts = queries.count_accounts(session, item.id) > 0
+        with guard:
+            has_accounts = queries.count_accounts(session, item.id) > 0
         settled = result.history_complete and quiet and has_accounts
         if settled or elapsed + interval > timeout:
             return WaitOutcome(

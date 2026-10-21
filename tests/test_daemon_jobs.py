@@ -51,6 +51,7 @@ def _build(settings, keys, gateway, sleep=None, clock=None):
     )
     tokens = {r: (locations.credentials_dir / f"{r}.token").read_text().strip() for r in ROLES}
     return SimpleNamespace(
+        app=app,
         client=TestClient(app, base_url="http://127.0.0.1"),
         as_={r: {CRED: t} for r, t in tokens.items()},
         grants=grants,
@@ -187,13 +188,113 @@ def test_job_waits_for_the_process_wide_write_lock(d):
     assert _finish(d, job_id)["state"] == "done"
 
 
-def test_mcp_role_cannot_start_or_read_a_job_without_a_grant(d):
+def test_mcp_needs_both_link_and_sync_grants_to_start_a_job(d):
     mcp = d.as_["mcp"]
     _error(d.client.post(URL, headers=mcp, json={}), 403, "WRITE_NOT_GRANTED")
-    _error(d.client.get("/v1/jobs/whatever", headers=mcp), 403, "WRITE_NOT_GRANTED")
     d.grants.grant({"link"}, 600)
+    _error(d.client.post(URL, headers=mcp, json={}), 403, "WRITE_NOT_GRANTED")
+    d.grants.grant({"link", "sync"}, 600)
     job_id = _start(d, role="mcp")
     assert _finish(d, job_id, role="mcp")["state"] == "done"
+
+
+def test_reading_a_job_needs_only_read(d):
+    job_id = _start(d)
+    _finish(d, job_id)
+    r = d.client.get(f"/v1/jobs/{job_id}", headers=d.as_["mcp"])  # no grant at all
+    assert r.status_code == 200 and r.json()["state"] == "done"
+
+
+def test_missing_plaid_keys_is_503_and_creates_no_job(settings, keys):
+    settings.plaid_client_id = ""
+    d = _build(settings, keys, None)
+    _error(d.client.post(URL, headers=d.as_["cli"], json={}), 503, "NOT_CONFIGURED")
+    assert d.app.state.daemon.jobs._jobs == {}
+
+
+def test_sync_can_complete_between_two_polls_of_a_running_job(settings, keys):
+    paused, proceed = threading.Event(), threading.Event()
+    clock = Clock()
+
+    def gated_sleep(seconds):
+        paused.set()
+        assert proceed.wait(10)
+        clock.sleep(seconds)
+
+    d = _build(settings, keys, slow_history_gateway(), gated_sleep, clock.monotonic)
+    job_id = _start(d, interval=5)
+    assert paused.wait(10)  # the job is between two polls, sleeping
+    assert PLAID_WRITE_LOCK.acquire(blocking=False), "lock must be free during the sleep"
+    PLAID_WRITE_LOCK.release()
+    r = d.client.post("/v1/sync", headers=d.as_["cli"])
+    assert r.status_code == 200, r.text
+    proceed.set()
+    assert _finish(d, job_id)["state"] == "done"
+
+
+def _gated(settings, keys):
+    release, started = threading.Event(), threading.Event()
+    clock = Clock()
+
+    def gated_sleep(seconds):
+        started.set()
+        assert release.wait(10)
+        clock.sleep(seconds)
+
+    return _build(settings, keys, slow_history_gateway(), gated_sleep, clock.monotonic), (
+        release,
+        started,
+    )
+
+
+def test_second_job_while_one_runs_is_409_with_the_running_id(settings, keys):
+    d, (release, started) = _gated(settings, keys)
+    first = _start(d, interval=5)
+    assert started.wait(10)
+    body = _error(d.client.post(URL, headers=d.as_["cli"], json={}), 409, "JOB_ALREADY_RUNNING")
+    assert body["job_id"] == first
+    assert len(d.app.state.daemon.jobs._jobs) == 1
+    release.set()
+    assert _finish(d, first)["state"] == "done"
+    assert _finish(d, _start(d, interval=5))["state"] == "done"
+
+
+def test_two_simultaneous_posts_start_exactly_one_job(settings, keys):
+    d, (release, _) = _gated(settings, keys)  # the first job stays running during both posts
+    barrier = threading.Barrier(2)
+    codes = []
+
+    def post():
+        barrier.wait()
+        codes.append(d.client.post(URL, headers=d.as_["cli"], json={"interval": 5}).status_code)
+
+    threads = [threading.Thread(target=post) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join(10) for t in threads]
+    release.set()
+    assert sorted(codes) == [202, 409]
+
+
+class _Boom(BaseException):
+    pass
+
+
+def test_base_exception_fails_the_job_and_releases_the_slot():
+    jm = JobManager()
+
+    def boom(emit):
+        raise _Boom("secret-detail-9")
+
+    job_id = jm.start(boom, exclusive="sandbox-link")
+    for _ in range(500):
+        if jm.get(job_id).state != "running":
+            break
+        time.sleep(0.01)
+    job = jm.get(job_id)
+    assert job.state == "failed"
+    assert job.events[-1]["error_code"] == "INTERNAL_ERROR"
+    assert "secret-detail-9" not in str(job)
+    assert jm.get(jm.start(lambda emit: {}, exclusive="sandbox-link")) is not None
 
 
 def test_unknown_job_id_is_404(d):
