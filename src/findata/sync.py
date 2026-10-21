@@ -13,14 +13,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import time
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from findata.contexts import raw_context, token_context
 from findata.db import Account, Item, Transaction
 from findata.plaid_gateway import PlaidError, PlaidGateway
 from findata.security import FieldCipher
@@ -125,16 +124,6 @@ def _jsonable(obj: Any) -> Any:
     return str(obj)  # Plaid enum-like model values
 
 
-def token_context(item_id: str) -> str:
-    """Associated data binding an access-token ciphertext to its Item."""
-    return f"items.access_token:{item_id}"
-
-
-def raw_context(transaction_id: str) -> str:
-    """Associated data binding a raw-payload ciphertext to its transaction."""
-    return f"transactions.raw:{transaction_id}"
-
-
 def _upsert_transaction(session: Session, cipher: FieldCipher, t: dict[str, Any]) -> None:
     pfc = t.get("personal_finance_category") or {}
     txn = session.get(Transaction, t["transaction_id"]) or Transaction(id=t["transaction_id"])
@@ -186,112 +175,3 @@ def sync_item(
 def sync_all(session: Session, gateway: PlaidGateway, cipher: FieldCipher) -> list[SyncResult]:
     items = session.scalars(select(Item)).all()
     return [sync_item(session, gateway, cipher, item) for item in items]
-
-
-def link_item(
-    session: Session, gateway: PlaidGateway, cipher: FieldCipher, public_token: str
-) -> Item:
-    """Exchange a public token and store the resulting Item with an encrypted access token."""
-    item_id, access_token = gateway.exchange_public_token(public_token)
-    meta = gateway.get_item(access_token)
-    item = session.get(Item, item_id) or Item(id=item_id)
-    item.access_token_enc = cipher.encrypt(access_token, token_context(item_id))
-    item.institution_id = meta.get("institution_id")
-    item.institution_name = meta.get("institution_name")
-    session.add(item)
-    session.commit()
-    return item
-
-
-def remove_item(
-    session: Session,
-    gateway: PlaidGateway,
-    cipher: FieldCipher,
-    item: Item,
-    *,
-    local_only: bool = False,
-) -> None:
-    """Revoke `item` at Plaid, then delete it and its accounts/transactions locally.
-
-    Plaid first: if that fails the local rows stay, so the token is never orphaned. An Item
-    Plaid no longer knows (ITEM_NOT_FOUND) is already revoked, so local cleanup proceeds.
-    `local_only` skips the Plaid call (e.g. Sandbox data that was reset on Plaid's side).
-    """
-    if not local_only:
-        try:
-            gateway.item_remove(cipher.decrypt(item.access_token_enc, token_context(item.id)))
-        except PlaidError as exc:
-            if exc.error_code != "ITEM_NOT_FOUND":
-                raise
-    session.delete(item)
-    session.commit()
-
-
-@dataclass(frozen=True)
-class WaitOutcome:
-    """Result of waiting for an Item's history to finish loading, summed over every poll."""
-
-    item_id: str
-    added: int
-    modified: int
-    removed: int
-    status: str | None
-    polls: int
-    elapsed: float
-    settled: bool = False
-
-    @property
-    def history_complete(self) -> bool:
-        """Plaid said complete AND the last pass changed nothing (see wait_for_history)."""
-        return self.settled
-
-
-def wait_for_history(
-    session: Session,
-    gateway: PlaidGateway,
-    cipher: FieldCipher,
-    item: Item,
-    *,
-    timeout: float = 120.0,
-    interval: float = 5.0,
-    on_poll: Callable[[int, SyncResult, float], None] | None = None,
-    sleep: Callable[[float], None] | None = None,
-    clock: Callable[[], float] | None = None,
-) -> WaitOutcome:
-    """Sync `item` repeatedly until Plaid reports its full history, or `timeout` passes.
-
-    A freshly linked Item reports INITIAL_UPDATE_COMPLETE with few or no transactions; the
-    rest arrives later, so a single sync is not "done". Plaid can also report
-    HISTORICAL_UPDATE_COMPLETE a pass before the last rows land (and keep editing recent ones),
-    so the status alone is not trusted: the wait ends only on a pass that reports complete and
-    adds, modifies and removes nothing, once the Item's accounts are known. The wait is bounded
-    and never raises on timeout: the caller inspects `history_complete` and can simply sync
-    again later.
-    """
-    sleep = sleep or time.sleep
-    clock = clock or time.monotonic
-    start = clock()
-    added = modified = removed = polls = 0
-    while True:
-        result = sync_item(session, gateway, cipher, item)
-        polls += 1
-        added, modified, removed = (
-            added + result.added,
-            modified + result.modified,
-            removed + result.removed,
-        )
-        elapsed = clock() - start
-        if on_poll:
-            on_poll(polls, result, elapsed)
-        quiet = not (result.added or result.modified or result.removed)
-        has_accounts = bool(
-            session.scalar(
-                select(func.count()).select_from(Account).where(Account.item_id == item.id)
-            )
-        )
-        settled = result.history_complete and quiet and has_accounts
-        if settled or elapsed + interval > timeout:
-            return WaitOutcome(
-                item.id, added, modified, removed, result.status, polls, elapsed, settled
-            )
-        sleep(interval)

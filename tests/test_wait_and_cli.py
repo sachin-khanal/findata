@@ -8,8 +8,11 @@ from typer.testing import CliRunner
 from findata import cli
 from findata.config import Settings
 from findata.db import Account, Item, Transaction, make_session_factory
+from findata.linking import link_item
 from findata.plaid_gateway import PlaidError
-from findata.sync import HISTORY_COMPLETE, describe_status, link_item, wait_for_history
+from findata.runtime import Runtime
+from findata.sync import HISTORY_COMPLETE, describe_status
+from findata.waiting import wait_for_history
 from tests.conftest import ACCESS_TOKEN, FakeGateway, account, txn
 
 
@@ -161,14 +164,13 @@ def test_timeout_while_still_changing_is_not_reported_complete(session, cipher, 
 @pytest.fixture
 def run_cli(monkeypatch, engine, cipher, tmp_path):
     clock = Clock()
-    monkeypatch.setattr("findata.sync.time.sleep", clock.sleep)
-    monkeypatch.setattr("findata.sync.time.monotonic", clock.monotonic)
+    monkeypatch.setattr("findata.waiting.time.sleep", clock.sleep)
+    monkeypatch.setattr("findata.waiting.time.monotonic", clock.monotonic)
     holder = {"gateway": slow_history_gateway()}
     settings = Settings(findata_data_dir=tmp_path, _env_file=None)
     monkeypatch.setattr(
-        cli,
-        "_deps",
-        lambda: (settings, make_session_factory(engine), holder["gateway"], cipher),
+        "findata.runtime.build_runtime",
+        lambda: Runtime(settings, make_session_factory(engine), cipher, holder["gateway"]),
     )
     runner = CliRunner()
     return lambda *args: runner.invoke(cli.app, list(args)), holder
@@ -247,7 +249,7 @@ def test_missing_credentials_say_what_to_do(monkeypatch):
     def boom():
         raise RuntimeError("PLAID_CLIENT_ID and PLAID_SECRET are not set. Copy .env.example")
 
-    monkeypatch.setattr(cli, "_deps", boom)
+    monkeypatch.setattr("findata.runtime.build_runtime", boom)
     r = CliRunner().invoke(cli.app, ["sync", "--json"])
     assert r.exit_code == 1
     assert json.loads(r.output)["error_code"] == "NOT_CONFIGURED"

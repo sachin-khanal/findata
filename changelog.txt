@@ -11,6 +11,7 @@ be5a49b  2026-10-14  [integrate/encryption-and-wait] Merge feature/encrypted-sto
 8f5607a  2026-10-14  [integrate/encryption-and-wait] Add changelog.txt and a PostToolUse hook that prompts Claude to append a one-line entry after each git commit.
 b03c6f8  2026-10-14  [integrate/encryption-and-wait] Document the macOS hidden-flag .venv breakage on synced Desktop folders, keep the venv outside via UV_PROJECT_ENVIRONMENT, ignore .claude/settings.local.json.
 3e886cd  2026-10-14  [integrate/encryption-and-wait] Add `items list`/`items rm` (revokes at Plaid first), reuse the Sandbox item on re-link (--new to override), and explain pre-encryption data dirs.
+e42f001  2026-10-21  [main]  Merge integrate/encryption-and-wait into main: encryption at rest plus the sandbox-link wait fix, items list/rm, and changelog hook; integration and source branches deleted.
 
-Uncommitted changes: changelog.txt (this entry for 3e886cd).
-Branch notes: integrate/encryption-and-wait = fix/sandbox-link-wait + feature/encrypted-storage; the two source branches and main are unchanged.
+Uncommitted changes: changelog.txt (this entry for e42f001).
+Branch notes: main contains everything; feature/encrypted-storage, fix/sandbox-link-wait and integrate/encryption-and-wait were merged and deleted locally; scaffold/plaid-sync remains from PR #1.

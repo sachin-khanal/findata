@@ -120,7 +120,17 @@ $("link").onclick = async () => {
   } catch (e) { status(`Could not start Plaid Link: ${e.message}`, "error"); }
 };
 $("sync").onclick = () => sync();
-refresh().catch((e) => status(`Could not load data: ${e.message}`, "error"));
+// On load, say what is already linked instead of the first-run "link an account" hint.
+async function showLinked() {
+  const items = await api("/api/items");
+  if (!items.length) return;
+  const names = items.map((i) => i.institution_name || i.id).join(", ");
+  const last = items.map((i) => i.last_synced_at).filter(Boolean).sort().pop();
+  status(`${items.length} linked: ${names}. ` +
+    (last ? `Last synced ${new Date(last + "Z").toLocaleString()}.` : "Not synced yet: click Sync."), "idle");
+}
+
+refresh().then(showLinked).catch((e) => status(`Could not load data: ${e.message}`, "error"));
 </script>
 </body>
 </html>

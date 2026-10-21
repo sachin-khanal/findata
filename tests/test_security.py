@@ -11,6 +11,7 @@ from findata.security import (
     FieldCipher,
     KeychainUnavailableError,
     Keys,
+    keychain,
     load_keys,
     load_or_create_api_token,
     load_or_create_master_key,
@@ -117,9 +118,9 @@ def test_pre_encryption_data_dir_gets_a_specific_message(settings):
 @pytest.fixture
 def fake_keychain(monkeypatch):
     store: dict[str, str] = {}
-    monkeypatch.setattr(security, "_keyring_get", lambda account: store.get(account))
+    monkeypatch.setattr(keychain, "keyring_get", lambda account: store.get(account))
     monkeypatch.setattr(
-        security, "_keyring_set", lambda account, value: store.update({account: value})
+        keychain, "keyring_set", lambda account, value: store.update({account: value})
     )
     return store
 
@@ -143,8 +144,8 @@ def _no_keychain(monkeypatch):
     def boom(*_a):
         raise KeychainUnavailableError("no OS keychain is available")
 
-    monkeypatch.setattr(security, "_keyring_get", boom)
-    monkeypatch.setattr(security, "_keyring_set", boom)
+    monkeypatch.setattr(keychain, "keyring_get", boom)
+    monkeypatch.setattr(keychain, "keyring_set", boom)
 
 
 @posix_only
