@@ -224,6 +224,7 @@ dependencies = [
     { name = "alembic" },
     { name = "cryptography" },
     { name = "fastapi" },
+    { name = "httpx2" },
     { name = "keyring" },
     { name = "plaid-python" },
     { name = "pydantic-settings" },
@@ -235,7 +236,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx2" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -245,6 +245,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.20.0" },
     { name = "cryptography", specifier = ">=50.0" },
     { name = "fastapi", specifier = ">=0.141" },
+    { name = "httpx2", specifier = ">=2.13" },
     { name = "keyring", specifier = ">=25.7.0" },
     { name = "plaid-python", specifier = ">=44.0" },
     { name = "pydantic-settings", specifier = ">=2.15" },
@@ -256,7 +257,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx2", specifier = ">=2.13" },
     { name = "pytest", specifier = ">=9.1" },
     { name = "ruff", specifier = ">=0.16" },
 ]

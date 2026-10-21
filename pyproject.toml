@@ -9,6 +9,7 @@ dependencies = [
     "alembic>=1.20.0",
     "cryptography>=50.0",
     "fastapi>=0.141",
+    "httpx2>=2.13",
     "keyring>=25.7.0",
     "plaid-python>=44.0",
     "pydantic-settings>=2.15",
@@ -23,7 +24,6 @@ findata = "findata.cli:app"
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.13",
     "pytest>=9.1",
     "ruff>=0.16",
 ]
