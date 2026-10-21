@@ -81,8 +81,8 @@ class SandboxLinkIn(BaseModel):
     username: str | None = None
     new: bool = False
     wait: bool = True
-    timeout: float = 120.0
-    interval: float = 2.0
+    timeout: float = Field(120.0, ge=0, le=3600)
+    interval: float = Field(5.0, ge=0.5, le=60)
 
 
 class JobOut(BaseModel):

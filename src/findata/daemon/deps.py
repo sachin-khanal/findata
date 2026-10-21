@@ -11,7 +11,7 @@ import datetime as dt
 import logging
 import threading
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from findata.daemon.audit import SCOPE_KEY, AuditLog, RequestAudit
 from findata.daemon.auth import ROLE_PERMISSIONS, CredentialStore, Permission, Role
 from findata.daemon.grants import GRANTABLE, ApprovalStore, GrantStore
+from findata.daemon.jobs import JobManager
 from findata.plaid_gateway import PlaidGateway
 from findata.runtime import Runtime
 
@@ -53,6 +54,9 @@ class DaemonState:
     started_at: dt.datetime
     clock: Callable[[], dt.datetime]
     on_shutdown: Callable[[], None] | None
+    jobs: JobManager = field(default_factory=JobManager)
+    job_sleep: Callable[[float], None] | None = None
+    job_clock: Callable[[], float] | None = None
 
 
 def get_state(request: Request) -> DaemonState:

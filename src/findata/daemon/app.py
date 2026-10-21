@@ -92,6 +92,8 @@ def create_daemon_app(
     started_at: dt.datetime,
     clock: Callable[[], dt.datetime],
     on_shutdown: Callable[[], None] | None = None,
+    job_sleep: Callable[[float], None] | None = None,
+    job_clock: Callable[[], float] | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="findata daemon",
@@ -109,6 +111,8 @@ def create_daemon_app(
         started_at=started_at,
         clock=clock,
         on_shutdown=on_shutdown,
+        job_sleep=job_sleep,
+        job_clock=job_clock,
     )
     _install_error_handlers(app)
     app.add_middleware(AuditMiddleware, audit=audit)
