@@ -19,6 +19,8 @@ c75adf2  2026-10-21  [feature/alembic-migrations] Add Alembic schema migrations 
 a2e2a87  2026-10-21  [design/daemon-architecture] Add design doc for a daemon-centred architecture: `findata start` owns key/DB/Plaid, `serve web` and `serve mcp` are front ends that get all data (incl. CLI) through the daemon.
 1c5ae20  2026-10-21  [design/daemon-architecture] Design: MCP role is read-only by default and write tools need a time-limited, user-present grant (agent cannot self-grant; all grants audited).
 937b396  2026-10-21  [design/daemon-architecture] Design: `findata start` runs in the foreground by default; `--background` detaches it (log file, status/stop work either way).
+edf07f4  2026-10-21  [plan/daemon-architecture] Add the 13-task implementation plan for the daemon architecture (audit log migration 0002, roles/grants, DaemonClient, CLI/web/MCP as clients, boundary test); spec already merged as f1fe53d.
+cc242c1  2026-10-21  [plan/daemon-architecture] Plan: fix the boundary-test file list (drop a nonexistent module, note commands/daemon.py exclusion).
 
-Uncommitted changes: changelog.txt (entries for c75adf2, 33e762d, a2e2a87, 1c5ae20 and 937b396).
-Branch notes: main has everything except design/daemon-architecture (a2e2a87, 1c5ae20, 937b396, design doc only, not merged); feature/alembic-migrations and refactor/modular-layout were merged and still exist locally; scaffold/plaid-sync remains from PR #1.
+Uncommitted changes: changelog.txt (entries for edf07f4 and cc242c1).
+Branch notes: main contains the merged design (f1fe53d); plan/daemon-architecture (edf07f4, cc242c1) holds the implementation plan and is not merged; earlier feature branches were merged and still exist locally; scaffold/plaid-sync remains from PR #1.
