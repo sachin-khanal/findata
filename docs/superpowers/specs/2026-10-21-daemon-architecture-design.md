@@ -48,6 +48,8 @@ stopped).
 ## Anti-goals (a failure even if it technically works)
 
 - A front end that can open the database, load the master key or hold Plaid credentials.
+- An agent that can grant itself write access, or that can use a grant it was not given
+  (expired, revoked, or for a different operation).
 - A silent fallback to direct database access when the daemon is down.
 - The daemon listening on a network interface or being reachable by other users.
 - Secrets or transaction data in logs, the audit log, or error messages.
@@ -89,11 +91,27 @@ stopped).
 ### Authentication and roles
 
 - Each client authenticates to the daemon with a credential tied to a role, issued and checked
-  by the daemon. Minimum roles: **web** (human: read, sync, link, remove) and **mcp** (agent:
-  read-only, scoped tools). The CLI acts as the human role.
+  by the daemon. Minimum roles: **web** (human: read, sync, link, remove) and **mcp** (agent).
+  The CLI acts as the human role.
+- **The mcp role is read-only by default** and can only gain write operations through
+  user-present authorization (below). Reads never need it.
 - Credentials live in owner-only files in the data directory, like the current API token.
 - The daemon enforces the role on every route. A front end cannot widen its own access.
 
+### Enabling writes for the agent (user-present authorization)
+
+- Writes by the mcp role (sync, link, remove, and any later write) are off until a human
+  turns them on. The agent can ask for access but can never grant it to itself: the grant is
+  made through a human channel the agent has no credential for.
+- *(My guess at the mechanism, to confirm: the user runs `findata grant mcp-write` in a
+  terminal, or approves a pending request in the web UI. The grant is time-limited, defaults
+  to a short window, names the operations it covers, and can be revoked with
+  `findata revoke mcp-write`. Item removal additionally needs a fresh confirmation each
+  time.)*
+- The daemon stores grants, checks them on every write, lets them expire on their own, and
+  clears them when it stops. Granting, using and revoking are all written to the audit log.
+- An agent write attempt without a grant fails with a specific error that tells the agent a
+  human must authorize it. Nothing is queued or retried silently.
 ### Web front end (`findata serve web`)
 
 - Serves the existing UI on 127.0.0.1:8765 and keeps the existing browser protections (token
@@ -104,7 +122,10 @@ stopped).
 
 ### MCP front end (`findata serve mcp`)
 
-- Read-only tools over the same data: items, accounts, transactions (with filters), status.
+- Read tools over the same data are always available: items, accounts, transactions (with
+  filters), status.
+- Write tools exist but are refused until the user has granted write access (see
+  "Enabling writes"); they are listed with that requirement so an agent knows why.
 - Default transport is stdio, because agent hosts launch MCP servers themselves. HTTP can come
   later.
 - Connects to the daemon as the **mcp** role. If the daemon is down, tools return a clear
@@ -136,7 +157,8 @@ stopped).
 - The daemon's API is tested in process with the fake Plaid gateway, as the API is today.
 - Clients and front ends are tested against an in-process daemon.
 - At least one end-to-end test uses a real socket: start a daemon, call it from a client,
-  confirm a front end cannot read without its credential, and that the mcp role cannot write.
+  confirm a front end cannot read without its credential, and that the mcp role cannot write
+  without a grant, can after one, and cannot once it expires or is revoked.
 - Existing tests for sync, security, schema and CLI output keep passing (their imports may
   move).
 
@@ -144,7 +166,8 @@ stopped).
 
 - Foreground by default, with an optional `--detach` to run in the background. Writing
   launchd/systemd files is out of scope.
-- Agents (mcp role) are read-only and cannot trigger a sync, link a bank or remove one.
+- *(Revised by the user: the mcp role is read-only by default; writes need user-present
+  authorization. The grant mechanism above is my guess and still to be confirmed.)*
 - Unix socket only on macOS and Linux; loopback with credential on Windows if needed.
 - Audit log is a database table (migration 0002), not a text file.
 - The old `findata serve` stops starting a server and becomes the parent of `serve web` and
