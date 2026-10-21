@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from findata.config import Settings, get_settings
 from findata.db import make_engine, make_session_factory
 from findata.plaid_gateway import PlaidClient, PlaidGateway
+from findata.schema import ensure_current
 from findata.security import FieldCipher, load_keys
 
 
@@ -46,8 +47,13 @@ def build_runtime(
     gateway: PlaidGateway | None = None,
     engine: Engine | None = None,
 ) -> Runtime:
-    """Load keys and open the database. `gateway` and `engine` let tests inject their own."""
+    """Load keys, open the database and check its schema is current.
+
+    Raises SchemaOutOfDateError if migrations are pending. `gateway` and `engine` let tests
+    inject their own.
+    """
     settings = settings or get_settings()
     keys = load_keys(settings)
     engine = engine or make_engine(settings.db_path, keys.db_key)
+    ensure_current(engine)
     return Runtime(settings, make_session_factory(engine), keys.cipher, gateway)

@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from findata import security
 from findata.db import make_engine
+from findata.schema import ensure_current
 from findata.security import (
     FieldCipher,
     KeychainUnavailableError,
@@ -178,6 +179,7 @@ def test_api_token_is_stable(tmp_path):
 def test_database_file_is_encrypted_on_disk(tmp_path):
     db = tmp_path / "d" / "findata.db"
     engine = make_engine(db, b"k" * 32)
+    ensure_current(engine)
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -214,6 +216,7 @@ def test_unencrypted_legacy_database_is_rejected(tmp_path):
 def test_data_survives_reopen_with_same_key(tmp_path):
     db = tmp_path / "d" / "findata.db"
     e = make_engine(db, b"k" * 32)
+    ensure_current(e)
     with e.begin() as conn:
         conn.execute(
             text(
