@@ -4,9 +4,11 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select, text
 
+from findata.contexts import raw_context, token_context
 from findata.db import Account, Item, Transaction
+from findata.linking import link_item
 from findata.plaid_gateway import PlaidError
-from findata.sync import MUTATION_ERROR, link_item, raw_context, sync_item, token_context
+from findata.sync import MUTATION_ERROR, sync_item
 from tests.conftest import ACCESS_TOKEN, FakeGateway, account, txn
 
 
