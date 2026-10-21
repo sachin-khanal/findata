@@ -15,6 +15,10 @@ class DaemonNotRunning(DaemonClientError):
     """The daemon could not be reached (no socket, nothing listening, or no answer in time)."""
 
 
+class DaemonTimeout(DaemonClientError):
+    """The daemon accepted the connection but did not answer in time; it may still be working."""
+
+
 class DaemonRejected(DaemonClientError):
     """The daemon answered with a non-2xx status."""
 

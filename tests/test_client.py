@@ -18,7 +18,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from findata.client import DaemonClient
-from findata.client.errors import DaemonClientError, DaemonNotRunning, DaemonRejected
+from findata.client.errors import DaemonClientError, DaemonNotRunning, DaemonRejected, DaemonTimeout
+from findata.client.liveness import daemon_lock_held
 from findata.locations import Locations
 from findata.wire import GrantOut, ItemOut, JobOut, SandboxLinkIn, StatusOut, TransactionOut
 from tests.test_daemon_api import OverlapGateway, _build, _pages
@@ -176,14 +177,17 @@ def test_socket_file_with_nothing_listening_raises_daemon_not_running():
         shutil.rmtree(data, ignore_errors=True)
 
 
-def test_timeout_maps_to_daemon_not_running(tmp_path):
+def test_timeout_maps_to_daemon_timeout_not_not_running(tmp_path):
     def slow(request):
         raise httpx2.ReadTimeout("slow", request=request)
 
     http = httpx2.Client(transport=httpx2.MockTransport(slow), base_url="http://daemon")
     c = DaemonClient(_cred_dir(tmp_path), "cli", timeout=3, http_client=http)
-    with pytest.raises(DaemonNotRunning, match="did not answer in 3"):
+    with pytest.raises(
+        DaemonTimeout, match=r"did not answer within 3 s.*may still be running"
+    ) as e:
         c.items()
+    assert not isinstance(e.value, DaemonNotRunning)
 
 
 def _cred_dir(tmp_path, token: str = "tok", name: str = "client-data") -> Path:  # noqa: S107
@@ -236,3 +240,77 @@ def test_importing_the_client_does_not_load_daemon_internals():
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)  # noqa: S603
     assert r.returncode == 0, r.stderr
+
+
+def test_quick_and_long_calls_use_their_own_timeouts(tmp_path):
+    seen = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen[request.url.path] = request.extensions["timeout"]["read"]
+        if request.url.path == "/v1/sync":
+            return httpx2.Response(200, json=[])
+        return httpx2.Response(200, json=[])
+
+    http = httpx2.Client(transport=httpx2.MockTransport(handler), base_url="http://daemon")
+    c = DaemonClient(_cred_dir(tmp_path), "cli", timeout=4, long_timeout=77, http_client=http)
+    c.items()
+    c.sync()
+    c.sync(timeout=5)
+    c.items(timeout=9)
+    assert seen["/v1/sync"] == 5 and seen["/v1/items"] == 9
+    seen.clear()
+    c.items()
+    c.sync()
+    assert seen == {"/v1/items": 4, "/v1/sync": 77}
+
+
+def test_path_segments_are_quoted(tmp_path):
+    paths = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        paths.append((request.url.raw_path.decode(), request.url.query))
+        return httpx2.Response(204)
+
+    http = httpx2.Client(transport=httpx2.MockTransport(handler), base_url="http://daemon")
+    c = DaemonClient(_cred_dir(tmp_path), "cli", http_client=http)
+    c.remove_item("../x")
+    c.remove_item("a?b")
+    c.approve("a/b#c")
+    assert paths[0][0].startswith("/v1/items/..%2Fx?")
+    assert paths[1][0].startswith("/v1/items/a%3Fb?")
+    assert paths[2][0] == "/v1/approvals/a%2Fb%23c"
+
+
+def test_daemon_lock_held_detects_a_real_holder(tmp_path):
+    lock = tmp_path / "daemon.lock"
+    assert daemon_lock_held(lock) is False  # missing file
+    lock.write_bytes(b"")
+    assert daemon_lock_held(lock) is False  # unheld
+    code = (
+        "import fcntl, sys, time\n"
+        f"f = open({str(lock)!r}, 'r+')\n"
+        "fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "print('held', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)  # noqa: S603
+    try:
+        assert proc.stdout.readline().strip() == "held"
+        assert daemon_lock_held(lock) is True
+    finally:
+        proc.kill()
+        proc.wait()
+    assert daemon_lock_held(lock) is False  # released with the process
+
+
+def test_tcp_branch_refuses_to_send_when_no_daemon_holds_the_lock(tmp_path):
+    data = _cred_dir(tmp_path)
+    locs = Locations(data)
+    locs.port_file.write_text("9")  # stale port file
+    locs.lock.write_bytes(b"")  # lock file exists but nobody holds it
+    c = DaemonClient(data, "cli")
+    with pytest.raises(DaemonNotRunning):
+        c._connect_tcp()
+    locs.lock.unlink()
+    with pytest.raises(DaemonNotRunning):
+        c._connect_tcp()
