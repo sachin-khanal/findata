@@ -71,6 +71,8 @@ def test_link_exchange_sync_and_query(client, auth):
             "modified": 0,
             "removed": 0,
             "status": "HISTORICAL_UPDATE_COMPLETE",
+            "history_complete": True,
+            "detail": "All available history is loaded.",
         }
     ]
 
@@ -86,3 +88,7 @@ def test_link_exchange_sync_and_query(client, auth):
 def test_plaid_errors_surface_as_502(client, auth):
     r = client.post("/api/link/exchange", headers=auth, json={"public_token": "bad"})
     assert r.status_code == 502 and r.json()["error_code"] == "INVALID_PUBLIC_TOKEN"
+
+
+def test_favicon_does_not_404(client):
+    assert client.get("/favicon.ico").status_code == 204

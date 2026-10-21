@@ -14,6 +14,7 @@ from plaid.api import plaid_api
 from plaid.model.country_code import CountryCode
 from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
+from plaid.model.item_remove_request import ItemRemoveRequest
 from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.products import Products
@@ -42,6 +43,7 @@ class PlaidGateway(Protocol):
     def exchange_public_token(self, public_token: str) -> tuple[str, str]: ...
     def sandbox_public_token(self, username: str = SANDBOX_TRANSACTIONS_USER) -> str: ...
     def get_item(self, access_token: str) -> dict[str, Any]: ...
+    def item_remove(self, access_token: str) -> None: ...
     def transactions_sync(
         self, access_token: str, cursor: str | None, count: int = 500
     ) -> dict[str, Any]: ...
@@ -115,6 +117,10 @@ class PlaidClient:
 
     def get_item(self, access_token: str) -> dict[str, Any]:
         return self._call(self._api.item_get, ItemGetRequest(access_token=access_token))["item"]
+
+    def item_remove(self, access_token: str) -> None:
+        """Revoke the Item at Plaid (invalidates the access token) via /item/remove."""
+        self._call(self._api.item_remove, ItemRemoveRequest(access_token=access_token))
 
     def transactions_sync(
         self, access_token: str, cursor: str | None, count: int = 500

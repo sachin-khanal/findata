@@ -8,7 +8,7 @@ from importlib.resources import files
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
@@ -18,7 +18,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from findata.config import Settings, get_settings
 from findata.db import Account, Item, Transaction, make_engine, make_session_factory
 from findata.plaid_gateway import PlaidClient, PlaidError, PlaidGateway
-from findata.security import TokenCipher, load_or_create_api_token
+from findata.security import load_keys, load_or_create_api_token
 from findata.sync import link_item, sync_all
 
 TOKEN_HEADER = "X-Findata-Token"  # noqa: S105 (header name, not a secret)
@@ -69,6 +69,9 @@ class SyncOut(BaseModel):
     modified: int
     removed: int
     status: str | None
+    # False while Plaid is still loading older transactions: more will arrive on a later sync.
+    history_complete: bool
+    detail: str
 
 
 # ---------- app factory ----------
@@ -80,9 +83,10 @@ def create_app(
     engine: Engine | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
-    engine = engine or make_engine(settings.db_path)
+    keys = load_keys(settings)
+    engine = engine or make_engine(settings.db_path, keys.db_key)
     session_factory = make_session_factory(engine)
-    cipher = TokenCipher.from_key_file(settings.key_path)
+    cipher = keys.cipher
     api_token = load_or_create_api_token(settings.api_token_path)
     _gateway: list[PlaidGateway | None] = [gateway]
 
@@ -128,6 +132,10 @@ def create_app(
             "__PLAID_ENV__", settings.plaid_env
         )
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)  # no icon; avoids a 404 in browser consoles
+
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "plaid_env": settings.plaid_env}
@@ -143,7 +151,10 @@ def create_app(
 
     @app.post("/api/sync", dependencies=auth)
     def sync(session: SessionDep, gw: GatewayDep) -> list[SyncOut]:
-        return [SyncOut(**r.__dict__) for r in sync_all(session, gw, cipher)]
+        return [
+            SyncOut(**r.__dict__, history_complete=r.history_complete, detail=r.detail)
+            for r in sync_all(session, gw, cipher)
+        ]
 
     @app.get("/api/items", dependencies=auth)
     def items(session: SessionDep) -> list[ItemOut]:

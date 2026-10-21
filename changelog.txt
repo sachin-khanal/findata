@@ -1,0 +1,16 @@
+findata changelog (oldest first; one line per commit)
+
+260555b  2026-09-16  [main]                      Initial commit: MIT license and README stub.
+d30498d  2026-10-09  [scaffold/plaid-sync]       Scaffold local-first Plaid sync: gateway, cursor-based transactions sync, SQLite with Fernet-encrypted tokens, FastAPI, CLI, web UI, tests, CI, ADR 0001.
+905a787  2026-10-12  [main]                      Merge PR #1 (scaffold/plaid-sync) into main.
+f7bf944  2026-10-12  [feature/encrypted-storage] Create the DB file and data dir owner-only (0600/0700) from the first byte and refuse access by other users.
+e4fd12f  2026-10-12  [feature/encrypted-storage] Add layered encryption at rest: SQLCipher DB, AES-256-GCM per-field tokens/raw payloads, HKDF keys, OS-keychain master key, ADR 0002.
+197754c  2026-10-13  [fix/sandbox-link-wait]     Fix sandbox-link stopping before Plaid history loads: add wait_for_history, progress output, --json, --timeout/--interval/--no-wait, exit codes, web UI status states.
+be5a49b  2026-10-14  [integrate/encryption-and-wait] Merge feature/encrypted-storage into the sandbox-link wait work; resolve the cli.py txns conflict and move wait_for_history to FieldCipher.
+8ec2dc9  2026-10-14  [integrate/encryption-and-wait] Stop trusting Plaid's COMPLETE status alone in wait_for_history: settle only on a quiet complete pass with accounts present.
+8f5607a  2026-10-14  [integrate/encryption-and-wait] Add changelog.txt and a PostToolUse hook that prompts Claude to append a one-line entry after each git commit.
+b03c6f8  2026-10-14  [integrate/encryption-and-wait] Document the macOS hidden-flag .venv breakage on synced Desktop folders, keep the venv outside via UV_PROJECT_ENVIRONMENT, ignore .claude/settings.local.json.
+3e886cd  2026-10-14  [integrate/encryption-and-wait] Add `items list`/`items rm` (revokes at Plaid first), reuse the Sandbox item on re-link (--new to override), and explain pre-encryption data dirs.
+
+Uncommitted changes: changelog.txt (this entry for 3e886cd).
+Branch notes: integrate/encryption-and-wait = fix/sandbox-link-wait + feature/encrypted-storage; the two source branches and main are unchanged.

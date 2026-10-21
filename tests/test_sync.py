@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 import pytest
@@ -5,7 +6,7 @@ from sqlalchemy import select, text
 
 from findata.db import Account, Item, Transaction
 from findata.plaid_gateway import PlaidError
-from findata.sync import MUTATION_ERROR, link_item, sync_item
+from findata.sync import MUTATION_ERROR, link_item, raw_context, sync_item, token_context
 from tests.conftest import ACCESS_TOKEN, FakeGateway, account, txn
 
 
@@ -30,7 +31,7 @@ def test_link_item_stores_only_encrypted_token(session, cipher, item):
     assert item.institution_name == "First Platypus Bank"
     raw = session.execute(text("SELECT access_token_enc FROM items")).scalar_one()
     assert ACCESS_TOKEN not in raw
-    assert cipher.decrypt(raw) == ACCESS_TOKEN
+    assert cipher.decrypt(raw, token_context("item_1")) == ACCESS_TOKEN
 
 
 def test_link_item_bad_public_token(session, cipher):
@@ -53,7 +54,7 @@ def test_initial_sync_paginates_and_stores(session, cipher, item):
     assert session.get(Account, "acc_1").current_balance == Decimal("100.0")
     t3 = session.get(Transaction, "t3")
     assert t3.amount == Decimal("-2500.0") and t3.category_primary == "FOOD_AND_DRINK"
-    assert t3.raw["date"] == "2026-09-01"
+    assert json.loads(cipher.decrypt(t3.raw_enc, raw_context("t3")))["date"] == "2026-09-01"
 
 
 def test_incremental_sync_modifies_and_removes(session, cipher, item):

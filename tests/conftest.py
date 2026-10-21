@@ -8,7 +8,7 @@ import pytest
 from findata.config import Settings
 from findata.db import make_engine, make_session_factory
 from findata.plaid_gateway import PlaidError
-from findata.security import TokenCipher
+from findata.security import Keys, load_keys
 
 ACCESS_TOKEN = "access-sandbox-SECRET-123"
 
@@ -50,6 +50,8 @@ class FakeGateway:
     def __init__(self, pages: dict[str | None, Any] | None = None) -> None:
         self.pages = pages or {}
         self.sync_calls: list[str | None] = []
+        self.removed_tokens: list[str] = []
+        self.remove_error: Exception | None = None
 
     def create_link_token(self, client_user_id: str) -> str:
         return "link-sandbox-abc"
@@ -70,6 +72,11 @@ class FakeGateway:
             "institution_name": "First Platypus Bank",
         }
 
+    def item_remove(self, access_token: str) -> None:
+        if self.remove_error:
+            raise self.remove_error
+        self.removed_tokens.append(access_token)
+
     def transactions_sync(self, access_token: str, cursor: str | None, count: int = 500):
         assert access_token == ACCESS_TOKEN
         self.sync_calls.append(cursor)
@@ -87,13 +94,19 @@ def settings(tmp_path) -> Settings:
         plaid_client_id="test",
         plaid_secret="test",
         findata_data_dir=tmp_path / "data",
+        findata_key_backend="file",  # never touch the developer's real OS keychain in tests
         _env_file=None,
     )
 
 
 @pytest.fixture
-def engine():
-    return make_engine(":memory:")
+def keys(settings) -> Keys:
+    return load_keys(settings)
+
+
+@pytest.fixture
+def engine(keys):
+    return make_engine(":memory:", keys.db_key)
 
 
 @pytest.fixture
@@ -103,5 +116,5 @@ def session(engine):
 
 
 @pytest.fixture
-def cipher(settings) -> TokenCipher:
-    return TokenCipher.from_key_file(settings.key_path)
+def cipher(keys):
+    return keys.cipher

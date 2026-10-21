@@ -17,6 +17,7 @@ cp .env.example .env         # add PLAID_CLIENT_ID and PLAID_SECRET (Sandbox)
 uv run findata init          # creates ~/.findata (key, API token, DB), all owner-only
 uv run findata sandbox-link  # links First Platypus Bank test data, no browser needed
 uv run findata txns          # print recent transactions
+uv run findata items list    # linked banks; `items rm <id>` revokes at Plaid + deletes locally
 uv run findata serve         # web UI + API at http://127.0.0.1:8765
 ```
 
@@ -36,8 +37,10 @@ Plaid ──/transactions/sync──▶ sync.py ──▶ SQLite (~/.findata/fin
 - **Sync** follows Plaid's cursor pattern: page until `has_more` is false, restart from the
   original cursor on `TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION`, then apply the whole delta
   and save the new cursor in one DB transaction.
-- **Secrets:** access tokens are Fernet-encrypted in the DB. The key is in a separate
-  `0600` file. See [ADR 0001](docs/adr/0001-local-first-storage-and-secrets.md).
+- **Encryption at rest:** the whole database is encrypted with SQLCipher, and Plaid access
+  tokens and raw payloads are additionally AES-256-GCM encrypted per field. Both keys derive
+  from one master key kept in the OS keychain (owner-only file fallback on headless machines).
+  See [ADR 0002](docs/adr/0002-layered-encryption-at-rest.md).
 - **Local API** needs an `X-Findata-Token` header (from `~/.findata/api.token`). It only
   accepts `localhost`/`127.0.0.1` Host headers, which blocks DNS-rebinding and cross-site requests.
 - **Money** is stored and returned as exact decimal strings. Plaid's sign convention applies:
@@ -70,7 +73,6 @@ Tests use a fake Plaid gateway, so they need no keys or network access.
 
 - [ ] Read-only MCP server over the same query layer (scoped tools, audit log)
 - [ ] Alembic migrations (the schema is currently created with `create_all`)
-- [ ] OS keychain for the encryption key (macOS Keychain via `keyring`)
 - [ ] Dockerfile + reproducible dev container
 - [ ] Webhooks / scheduled sync, balance refresh
 - [ ] ML: transaction categorization → anomaly detection → cash-flow forecast, with
