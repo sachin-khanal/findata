@@ -191,7 +191,7 @@ The inputs the spec implies but a straight reading would not test, most likely f
 ### Task 9: Web front end (`findata serve web`)
 
 **Files:**
-- Create: `src/findata/web/{app.py,deps.py,routes.py}`; move `index.html` stays in `src/findata/web/`
+- Create: `src/findata/web/{app.py,deps.py,routes.py}`; `index.html` stays in `src/findata/web/`
 - Delete: `src/findata/api/` (all of it), update `tests/test_api.py` to `tests/test_web.py`
 - Modify: `src/findata/cli/__init__.py` (`serve` becomes a group: `serve web`; the old `serve` command is removed)
 - Test: `tests/test_web.py`
@@ -262,7 +262,7 @@ The inputs the spec implies but a straight reading would not test, most likely f
 
 **Interfaces:** none new.
 
-- [ ] **Step 1: Write the tests:** `test_boundary.py::test_front_ends_and_data_cli_never_import_core_modules` parses every file under `findata/web`, `findata/mcp`, `findata/client` and `findata/cli/commands/{sync,txns,items,sandbox_link,daemon_clients,grants,audit}.py` and fails on any import of `findata.db`, `findata.security`, `findata.plaid_gateway`, `findata.sync`, `findata.linking`, `findata.waiting`, `findata.queries`, `findata.schema`, `findata.runtime`, `findata.contexts`, `findata.config`; `test_daemon_e2e.py::test_real_socket_end_to_end` starts a daemon on a temp data dir with the fake gateway, drives it with `DaemonClient` as `cli`, `web`, `mcp`, and asserts: read works for all, `mcp` write is refused, works after `grant`, refused after `revoke`, and a wrong credential is rejected.
+- [ ] **Step 1: Write the tests:** `test_boundary.py::test_front_ends_and_data_cli_never_import_core_modules` parses every file under `findata/web`, `findata/mcp`, `findata/client` and `findata/cli/commands/{sync,txns,items,sandbox_link,grants,audit}.py` (`commands/daemon.py` is excluded because `start` runs the core; keep `stop` and `status` there using only `DaemonClient`)` and fails on any import of `findata.db`, `findata.security`, `findata.plaid_gateway`, `findata.sync`, `findata.linking`, `findata.waiting`, `findata.queries`, `findata.schema`, `findata.runtime`, `findata.contexts`, `findata.config`; `test_daemon_e2e.py::test_real_socket_end_to_end` starts a daemon on a temp data dir with the fake gateway, drives it with `DaemonClient` as `cli`, `web`, `mcp`, and asserts: read works for all, `mcp` write is refused, works after `grant`, refused after `revoke`, and a wrong credential is rejected.
 - [ ] **Step 2: Run** `uv run pytest tests/test_boundary.py tests/test_daemon_e2e.py -v`; expected PASS (they should already hold; if the boundary test fails, fix the import it names).
 - [ ] **Step 3: Write the docs:** ADR 0004 recording the decisions in the spec; README quickstart updated; DEV_SETUP describes the process model, credentials, grants, and how to run daemon plus front ends in separate terminals.
 - [ ] **Step 4: Run** `uv run ruff check . && uv run ruff format --check . && uv run pytest -q`; expected all pass.
