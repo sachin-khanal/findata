@@ -122,6 +122,8 @@ def _sqlite_pragmas(dbapi_conn, _record):
 def make_engine(db_path: Path | str, db_key: bytes) -> Engine:
     """Open (creating if needed) the SQLCipher database at `db_path`, or ":memory:".
 
+    Only opens and unlocks it; the tables are created and versioned by `findata.schema`.
+
     `db_key` is the raw 32-byte SQLCipher key. It is passed as a hex blob, so SQLCipher skips
     password stretching and the key never has to be quoted or escaped.
     """
@@ -152,7 +154,6 @@ def make_engine(db_path: Path | str, db_key: bytes) -> Engine:
             "encrypted database (a database created before encryption was added must be "
             "re-created)."
         ) from exc
-    Base.metadata.create_all(engine)
     return engine
 
 

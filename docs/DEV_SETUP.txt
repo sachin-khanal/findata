@@ -132,7 +132,26 @@ Fix once: keep the venv outside the synced folder, e.g. in ~/.zshrc
 or move the checkout to an unsynced path like ~/code/findata. Quick repair in place:
     chflags -R nohidden .venv
 
-8. NOT USED YET
+8. SCHEMA MIGRATIONS
+--------------------
+The schema is versioned with Alembic (scripts in src/findata/migrations/versions). You never
+call the alembic CLI: the database is SQLCipher-encrypted, so everything goes through findata.
+
+  uv run findata migrate           # apply pending migrations (copies the DB file first)
+  uv run findata migrate --check   # exit 1 if the schema is behind; changes nothing
+
+  * A brand-new database is created at the latest version (`findata init` does this).
+  * A database from before migrations existed is adopted as version 0001, data untouched.
+  * A database that is behind is never changed implicitly: every other command stops and
+    tells you to run `findata migrate`. The pre-migration copy is
+    ~/.findata/findata.db.bak-<timestamp> (owner-only); delete old ones once you are happy.
+  * There is no `downgrade` command: restore the backup copy instead.
+
+Changing the schema: edit the model in src/findata/db.py, then add the next file under
+src/findata/migrations/versions by hand (copy 0001's header; revision "0002", down_revision
+"0001"; use op.batch_alter_table for ALTERs). tests/test_schema.py fails if the models and
+the migrations disagree, so a forgotten migration is caught in CI.
+
+9. NOT USED YET
 ---------------
-No Docker/dev container and no Alembic migrations (the schema is created with
-create_all, so schema changes need a fresh DB). These are on the README roadmap.
+No Docker/dev container (on the README roadmap).

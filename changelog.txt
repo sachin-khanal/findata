@@ -12,6 +12,8 @@ be5a49b  2026-10-14  [integrate/encryption-and-wait] Merge feature/encrypted-sto
 b03c6f8  2026-10-14  [integrate/encryption-and-wait] Document the macOS hidden-flag .venv breakage on synced Desktop folders, keep the venv outside via UV_PROJECT_ENVIRONMENT, ignore .claude/settings.local.json.
 3e886cd  2026-10-14  [integrate/encryption-and-wait] Add `items list`/`items rm` (revokes at Plaid first), reuse the Sandbox item on re-link (--new to override), and explain pre-encryption data dirs.
 e42f001  2026-10-21  [main]  Merge integrate/encryption-and-wait into main: encryption at rest plus the sandbox-link wait fix, items list/rm, and changelog hook; integration and source branches deleted.
+d721e3d  2026-10-21  [refactor/modular-layout] Split into isolated modules (api/, cli/, security/ packages plus queries, linking, waiting, runtime, contexts) so components change independently; Plaid-free commands no longer need keys; web UI shows linked banks on load.
+360c92b  2026-10-21  [main]  Merge refactor/modular-layout into main: isolated api/cli/security packages and shared queries, linking, waiting, runtime.
 
-Uncommitted changes: changelog.txt (this entry for e42f001).
-Branch notes: main contains everything; feature/encrypted-storage, fix/sandbox-link-wait and integrate/encryption-and-wait were merged and deleted locally; scaffold/plaid-sync remains from PR #1.
+Uncommitted changes: changelog.txt (this entry for d721e3d and 360c92b).
+Branch notes: main contains everything; refactor/modular-layout was merged (360c92b) and still exists locally; feature/encrypted-storage, fix/sandbox-link-wait and integrate/encryption-and-wait were merged and deleted locally; scaffold/plaid-sync remains from PR #1.

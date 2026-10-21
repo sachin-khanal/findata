@@ -15,6 +15,7 @@ Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you if ne
 uv sync
 cp .env.example .env         # add PLAID_CLIENT_ID and PLAID_SECRET (Sandbox)
 uv run findata init          # creates ~/.findata (key, API token, DB), all owner-only
+uv run findata migrate       # after pulling updates: bring the DB schema up to date
 uv run findata sandbox-link  # links First Platypus Bank test data, no browser needed
 uv run findata txns          # print recent transactions
 uv run findata items list    # linked banks; `items rm <id>` revokes at Plaid + deletes locally
@@ -72,7 +73,7 @@ Tests use a fake Plaid gateway, so they need no keys or network access.
 ## Roadmap
 
 - [ ] Read-only MCP server over the same query layer (scoped tools, audit log)
-- [ ] Alembic migrations (the schema is currently created with `create_all`)
+- [x] Alembic migrations (`findata migrate`, backup before changing an existing DB)
 - [ ] Dockerfile + reproducible dev container
 - [ ] Webhooks / scheduled sync, balance refresh
 - [ ] ML: transaction categorization → anomaly detection → cash-flow forecast, with

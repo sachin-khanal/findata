@@ -8,6 +8,7 @@ import pytest
 from findata.config import Settings
 from findata.db import make_engine, make_session_factory
 from findata.plaid_gateway import PlaidError
+from findata.schema import ensure_current
 from findata.security import Keys, load_keys
 
 ACCESS_TOKEN = "access-sandbox-SECRET-123"
@@ -106,7 +107,9 @@ def keys(settings) -> Keys:
 
 @pytest.fixture
 def engine(keys):
-    return make_engine(":memory:", keys.db_key)
+    engine = make_engine(":memory:", keys.db_key)
+    ensure_current(engine)
+    return engine
 
 
 @pytest.fixture
