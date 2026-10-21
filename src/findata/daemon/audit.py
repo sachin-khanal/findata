@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import QueryParams
+from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from findata.db import AuditEntry
@@ -123,8 +124,19 @@ def summarize(scope: Scope) -> tuple[str, str]:
     return operation, summary
 
 
+INTERNAL_ERROR_BODY = {
+    "error_code": "INTERNAL_ERROR",
+    "detail": "The daemon hit an unexpected error; its log names the error type.",
+}
+
+
 class AuditMiddleware:
-    """The one place every HTTP request is audited, after it finishes (401s and errors too)."""
+    """The one place every HTTP request is audited, after it finishes (401s and errors too).
+
+    It is also where unexpected exceptions stop. They are never re-raised, because the server
+    would log them in full and a message can hold data (an SQL error lists its parameters,
+    e.g. merchant names and amounts); only the exception type and route template are logged.
+    """
 
     def __init__(self, app: ASGIApp, audit: AuditLog) -> None:
         self.app = app
@@ -136,16 +148,27 @@ class AuditMiddleware:
             return
         facts = RequestAudit()
         scope[SCOPE_KEY] = facts
-        status = 500  # stays 500 if the app raises before it responds
+        status = 500
+        started = False
 
         async def send_and_note_status(message: Message) -> None:
-            nonlocal status
+            nonlocal status, started
             if message["type"] == "http.response.start":
-                status = message["status"]
+                status, started = message["status"], True
             await send(message)
 
         try:
             await self.app(scope, receive, send_and_note_status)
+        except Exception as exc:
+            status = 500
+            logger.error(
+                "Unexpected %s in %s %s",
+                type(exc).__name__,
+                scope["method"],
+                getattr(scope.get("route"), "path", "(no matching route)"),
+            )
+            if not started:
+                await JSONResponse(INTERNAL_ERROR_BODY, status_code=500)(scope, receive, send)
         finally:
             with anyio.CancelScope(shield=True):  # a dropped client still gets audited
                 await self._record(scope, facts.role, status)

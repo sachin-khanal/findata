@@ -371,6 +371,29 @@ def test_agent_retries_reuse_one_pending_request(d):
     assert len(ids) == 1 and len(d.approvals.pending()) == 1
 
 
+def test_agent_cannot_remove_local_only_even_with_an_approval(d):
+    _link_and_sync(d)
+    d.grants.grant(set(GRANTABLE), 600)
+    mcp = d.as_["mcp"]
+    local = {"local_only": True}
+    # refused before anything happens: no pending request is created for it
+    body = _error(d.client.delete("/v1/items/item_1", headers=mcp, params=local), 403, "FORBIDDEN")
+    assert "local" in body["detail"].lower() and "human" in body["detail"].lower()
+    assert d.approvals.pending() == []
+
+    rid = d.client.delete("/v1/items/item_1", headers=mcp).json()["request_id"]
+    assert d.client.post(f"/v1/approvals/{rid}", headers=d.as_["cli"]).status_code == 204
+    r = d.client.delete("/v1/items/item_1", headers=mcp, params={**local, "request_id": rid})
+    _error(r, 403, "FORBIDDEN")
+    assert len(d.client.get("/v1/items", headers=mcp).json()) == 1  # item untouched
+    assert d.gateway.removed_tokens == []
+
+    # the approval was not used up: the removal the human approved still works
+    r = d.client.delete("/v1/items/item_1", headers=mcp, params={"request_id": rid})
+    assert r.status_code == 204, r.text
+    assert d.gateway.removed_tokens == [ACCESS_TOKEN]  # revoked at Plaid, not orphaned
+
+
 def test_approving_an_unknown_request_is_404(d):
     _error(d.client.post("/v1/approvals/nope", headers=d.as_["cli"]), 404, "NOT_FOUND")
 
@@ -410,13 +433,20 @@ def test_plaid_error_is_502_with_plaid_code(d):
     _error(d.client.post("/v1/sync", headers=d.as_["cli"]), 502, "ITEM_LOGIN_REQUIRED")
 
 
-def test_unexpected_error_is_500_without_its_message_and_is_audited(d):
+def test_unexpected_error_is_500_without_its_message_and_is_audited(d, caplog):
     _link_and_sync(d)
-    d.gateway.pages["c1"] = ValueError("boom near Starbucks 987.65")
-    client = TestClient(d.client.app, base_url="http://127.0.0.1", raise_server_exceptions=False)
-    r = client.post("/v1/sync", headers=d.as_["cli"])
+    planted = "boom near Starbucks 987.65"
+    d.gateway.pages["c1"] = ValueError(planted)
+    # d.client re-raises anything the app lets escape; a server would log that in full, so the
+    # daemon must handle it itself rather than pass the exception (and its message) on.
+    with caplog.at_level(logging.DEBUG):
+        r = d.client.post("/v1/sync", headers=d.as_["cli"])
     _error(r, 500, "INTERNAL_ERROR")
     assert "Starbucks" not in r.text and "987.65" not in r.text
+    assert any("ValueError" in rec.getMessage() for rec in caplog.records)  # the type is logged
+    for text in [caplog.text, *(rec.getMessage() for rec in caplog.records)]:
+        assert "Starbucks" not in text and "987.65" not in text and planted not in text
+    assert not any(rec.exc_info for rec in caplog.records)  # no traceback with the message
     newest = _audit(d)[0]
     assert (newest["role"], newest["operation"], newest["outcome"]) == ("cli", "sync", "error")
 

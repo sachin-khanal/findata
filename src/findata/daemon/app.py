@@ -78,10 +78,8 @@ def _install_error_handlers(app: FastAPI) -> None:
         code = _HTTP_ERROR_CODES.get(exc.status_code, "HTTP_ERROR")
         return refused or _error(exc.status_code, code, str(exc.detail))
 
-    @app.exception_handler(Exception)
-    async def _unexpected(_: Request, exc: Exception) -> JSONResponse:
-        # The message could hold data (e.g. SQL parameters), so it never reaches the client.
-        return _error(500, "INTERNAL_ERROR", "The daemon hit an unexpected error; see its log.")
+    # Unexpected exceptions are handled by `AuditMiddleware`, which answers 500 INTERNAL_ERROR
+    # and logs only the exception type, so their messages reach neither client nor log.
 
 
 def create_daemon_app(

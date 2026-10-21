@@ -3,7 +3,8 @@
 An agent (mcp) needs a grant for `items.remove` *and* a human's approval of each removal:
 its first call creates a pending request and is refused with CONFIRMATION_REQUIRED and the
 request's id; a human approves that id (`POST /v1/approvals/{id}`); the agent retries with
-`?request_id=` and the approval is used up.
+`?request_id=` and the approval is used up. An agent can never remove `local_only`: that skips
+revoking the Item at Plaid, which is not what the human approved.
 """
 
 from __future__ import annotations
@@ -45,6 +46,13 @@ def remove(
     local_only: bool = False,
     request_id: str | None = None,
 ) -> Response:
+    if role == "mcp" and local_only:  # before any approval is created or used
+        raise DaemonError(
+            403,
+            "FORBIDDEN",
+            "Local-only removal skips revoking the item at Plaid, so only a human can do it "
+            "(`findata items rm <id> --local-only`). An agent may only request a normal removal.",
+        )
     item = session.get(Item, item_id)
     if item is None:
         raise DaemonError(404, "NOT_FOUND", f"No linked item has id {item_id!r}.")
