@@ -20,7 +20,8 @@ separately. They get all their data from the daemon and can never reach the data
 
 | Command | What it does |
 |---|---|
-| `findata start` | Run the daemon, the overarching software. Everything else depends on it. |
+| `findata start` | Run the daemon, the overarching software, in the foreground. Everything else depends on it. |
+| `findata start --background` | Same daemon, detached into the background (decided by the user). |
 | `findata serve web` | Start the web UI server. Data comes from the daemon. |
 | `findata serve mcp` | Start the agent MCP server. Data comes from the daemon. |
 
@@ -73,7 +74,10 @@ stopped).
 ### Daemon (`findata start`)
 
 - Runs in the foreground by default, so it works in a terminal, tmux or under launchd.
-  *(My call: see "Calls I made" for background mode.)*
+  `--background` detaches it instead (decided by the user). A backgrounded daemon writes a
+  log file in the data directory, and `findata status` and `findata stop` work the same
+  either way. If it fails to start in the background, `start` reports why and exits non-zero
+  rather than detaching a broken process.
 - Takes an exclusive lock in the data directory; a second `start` fails with a clear message.
 - Loads keys, opens the database, checks the schema, creates the shared `Runtime`.
 - Serves an internal, versioned API (`/v1/...`) over an owner-only Unix socket inside the
@@ -164,8 +168,8 @@ stopped).
 
 ## Calls I made (change any of these)
 
-- Foreground by default, with an optional `--detach` to run in the background. Writing
-  launchd/systemd files is out of scope.
+- Writing launchd/systemd service files is out of scope (the foreground mode is what they
+  would run). Foreground default and the `--background` flag are the user's decision.
 - *(Revised by the user: the mcp role is read-only by default; writes need user-present
   authorization. The grant mechanism above is my guess and still to be confirmed.)*
 - Unix socket only on macOS and Linux; loopback with credential on Windows if needed.
