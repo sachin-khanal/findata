@@ -11,6 +11,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     create_engine,
@@ -108,6 +109,23 @@ class Transaction(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
+
+
+class AuditEntry(Base):
+    """One request to the daemon: who, which operation, when, and how it ended.
+
+    Never holds request data: `summary` is only the method, route template and query-parameter
+    names (see `findata.daemon.audit`), so no transaction data or secrets land here.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    role: Mapped[str] = mapped_column(String(16))
+    operation: Mapped[str] = mapped_column(String(64))
+    summary: Mapped[str] = mapped_column(String(255))
+    outcome: Mapped[str] = mapped_column(String(32))
 
 
 def _sqlite_pragmas(dbapi_conn, _record):

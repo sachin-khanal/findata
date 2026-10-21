@@ -6,7 +6,9 @@ import datetime as dt
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+MAX_GRANT_TTL_S = 86_400  # a write grant lasts at most a day
 
 
 class ItemOut(BaseModel):
@@ -66,8 +68,8 @@ class StatusOut(BaseModel):
 
 
 class GrantIn(BaseModel):
-    operations: list[str]
-    ttl_s: int
+    operations: list[str] = Field(min_length=1)
+    ttl_s: int = Field(gt=0, le=MAX_GRANT_TTL_S)
 
 
 class GrantOut(BaseModel):
