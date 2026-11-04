@@ -283,6 +283,14 @@ def _exchange(d) -> None:
     assert r.status_code == 200, r.text
 
 
+def _add_item(d, keys, item_id: str, token: str = ACCESS_TOKEN, institution=None) -> None:
+    """An Item stored straight in the database, as if it had been linked."""
+    with d.session_factory() as s:
+        enc = keys.cipher.encrypt(token, token_context(item_id))
+        s.add(Item(id=item_id, institution_name=institution, access_token_enc=enc))
+        s.commit()
+
+
 def _eventually(condition, what: str, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while not condition():
@@ -588,6 +596,56 @@ def test_too_many_streams_is_503(settings, keys, steps):
         assert job.rest()[-1]["event"] == "job_finished"
 
 
+def test_mcp_holds_at_most_8_streams_so_humans_can_still_follow(settings, keys, steps):
+    async def fill_the_agents_8() -> None:
+        bus = EventBus()
+        agent = [bus.open_stream(follow=True, agent=True) for _ in range(8)]
+        with pytest.raises(TooManyStreams) as refused:
+            bus.open_stream(follow=True, agent=True)
+        assert (refused.value.limit, refused.value.agent) == (8, True)
+        humans = [bus.open_stream(follow=True) for _ in range(24)]  # the other 24 stay theirs
+        assert len(agent) + len(humans) == 32
+        bus.close_stream(agent[0])
+        bus.open_stream(follow=False, agent=True)  # a freed agent slot is the agent's again
+
+    asyncio.run(fill_the_agents_8())
+
+    d = _build(
+        settings, keys, slow_history_gateway(), sleep=steps.sleep, clock=steps.clock.monotonic
+    )
+    job_id = _start(d, interval=5)
+    steps.wait_paused()
+    mcp, cli = d.as_["mcp"], d.as_["cli"]
+    job_path = f"/v1/jobs/{job_id}/events"
+    with serve(d) as sock, contextlib.ExitStack() as open_streams:
+        agent = [open_streams.enter_context(stream(sock, "/v1/events", mcp)) for _ in range(6)]
+        agent += [open_streams.enter_context(stream(sock, job_path, mcp)) for _ in range(2)]
+        assert all(s.response.status_code == 200 for s in agent)  # job streams count too
+        for path in ("/v1/events", job_path):
+            with stream(sock, path, mcp) as ninth:
+                assert "agent (mcp)" in _refused(ninth, 503, "TOO_MANY_STREAMS")["detail"]
+        with stream(sock, "/v1/events", cli) as events, stream(sock, job_path, cli) as job:
+            assert events.response.status_code == job.response.status_code == 200
+            steps.release()
+            assert job.rest()[-1] == {
+                "event": "job_finished",
+                "state": "done",
+                "result": _job(d, job_id)["result"],
+            }
+
+
+def test_the_33rd_stream_overall_is_refused(d):
+    mcp, cli = d.as_["mcp"], d.as_["cli"]
+    with serve(d) as sock, contextlib.ExitStack() as open_streams:
+        held = [open_streams.enter_context(stream(sock, "/v1/events", mcp)) for _ in range(8)]
+        held += [open_streams.enter_context(stream(sock, "/v1/events", cli)) for _ in range(24)]
+        assert [s.response.status_code for s in held] == [200] * 32
+        for role in (cli, mcp):
+            with stream(sock, "/v1/events", role) as extra:
+                detail = _refused(extra, 503, "TOO_MANY_STREAMS")["detail"]
+                assert "32 event streams" in detail
+
+
 def test_idle_streams_do_not_block_other_requests(d):
     async def few_threads() -> None:  # the server's thread pool shrinks to 4 threads
         anyio.to_thread.current_default_thread_limiter().total_tokens = 4
@@ -679,14 +737,33 @@ def test_history_job_409_names_the_running_job(settings, keys, steps):
         settings, keys, slow_history_gateway(), sleep=steps.sleep, clock=steps.clock.monotonic
     )
     _exchange(d)
+    _add_item(d, keys, "item_2")
     first = _start_history(d)
     steps.wait_paused()
+    cli = d.as_["cli"]
+    # One running job at a time, whatever its kind or Item: the 409 names the one to follow.
+    for item_id in ("item_1", "item_2"):
+        r = d.client.post("/v1/jobs/history", headers=cli, json={"item_id": item_id})
+        assert _error(r, 409, "JOB_ALREADY_RUNNING")["job_id"] == first
+    r = d.client.post("/v1/jobs/sandbox-link", headers=cli, json={})
+    assert _error(r, 409, "JOB_ALREADY_RUNNING")["job_id"] == first
+    assert len(d.app.state.daemon.jobs._jobs) == 1
+    steps.release()
+    assert _job_stream(d, first)[-1]["state"] == "done"
+    assert _start_history(d, "item_2") != first  # once it has finished another may start
+
+
+def test_history_job_while_a_sandbox_link_job_runs_is_409(settings, keys, steps):
+    d = _build(
+        settings, keys, slow_history_gateway(), sleep=steps.sleep, clock=steps.clock.monotonic
+    )
+    first = _start(d, interval=5)
+    steps.wait_paused()  # it has linked item_1 and waits for its history
     r = d.client.post("/v1/jobs/history", headers=d.as_["cli"], json={"item_id": "item_1"})
     assert _error(r, 409, "JOB_ALREADY_RUNNING")["job_id"] == first
     assert len(d.app.state.daemon.jobs._jobs) == 1
     steps.release()
     assert _job_stream(d, first)[-1]["state"] == "done"
-    assert _start_history(d) != first  # once it has finished another may start
 
 
 def test_history_job_needs_plaid_keys_before_any_job(settings, keys):

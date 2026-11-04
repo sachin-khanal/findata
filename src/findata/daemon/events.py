@@ -26,6 +26,9 @@ from findata.wire import GAP_EVENT, KEEPALIVE_EVENT
 
 CAPACITY = 256  # events kept for streams that resume with `after`
 MAX_STREAMS = 32  # streams open at once, daemon-wide and job streams together
+# Of those, the agent (mcp) may hold this many, so the humans (cli, web) always have the rest:
+# an agent needs only `read` to open streams, and an idle stream never times out.
+MAX_AGENT_STREAMS = 8
 KEEPALIVE_S = 15.0  # a stream silent this long sends a keep-alive line
 
 
@@ -43,7 +46,13 @@ KEEPALIVE_LINE = ndjson({"event": KEEPALIVE_EVENT})
 
 
 class TooManyStreams(Exception):
-    """Every stream slot is taken."""
+    """Every stream slot is taken (`agent` False), or every slot the agent may hold (True);
+    `limit` is the cap that was reached."""
+
+    def __init__(self, limit: int, *, agent: bool) -> None:
+        super().__init__(limit)
+        self.limit = limit
+        self.agent = agent
 
 
 class Stream:
@@ -81,17 +90,20 @@ class EventBus:
         capacity: int = CAPACITY,
         max_subscribers: int = MAX_STREAMS,
         *,
+        max_agent_streams: int = MAX_AGENT_STREAMS,
         clock: Callable[[], dt.datetime] = _utcnow,
     ) -> None:
-        if capacity < 1 or max_subscribers < 1:
-            raise ValueError("capacity and max_subscribers must be positive")
+        if capacity < 1 or max_subscribers < 1 or max_agent_streams < 0:
+            raise ValueError("stream and buffer limits must be positive")
         self._clock = clock
         self._max = max_subscribers
+        self._max_agent = max_agent_streams
         self._lock = threading.Lock()
         self._seq = 0
         self._buffer: deque[tuple[int, bytes]] = deque(maxlen=capacity)  # (seq, line)
         self._streams: set[Stream] = set()  # every open stream; all are woken on close
         self._followers: set[Stream] = set()  # streams of bus events, woken by each publish
+        self._agent: set[Stream] = set()  # the open streams the agent (mcp) holds
         self._closed = False
 
     def publish(self, event: str, **fields: Any) -> int:
@@ -119,8 +131,10 @@ class EventBus:
             lines = b"".join(line for seq, line in self._buffer if seq > after)
             return after + 1 < first, lines, self._seq
 
-    def open_stream(self, *, follow: bool) -> Stream:
-        """Take a stream slot for a coroutine in the running event loop, or TooManyStreams.
+    def open_stream(self, *, follow: bool, agent: bool = False) -> Stream:
+        """Take a stream slot for a coroutine in the running event loop, or TooManyStreams
+        once `max_subscribers` are open, or, for the `agent`, once it holds
+        `max_agent_streams`.
 
         A `follow` stream is woken by every publish; every stream is woken by `close`. The
         caller gives the slot back with `close_stream` however the stream ends.
@@ -128,17 +142,22 @@ class EventBus:
         loop = asyncio.get_running_loop()
         with self._lock:
             if len(self._streams) >= self._max:
-                raise TooManyStreams
+                raise TooManyStreams(self._max, agent=False)
+            if agent and len(self._agent) >= self._max_agent:
+                raise TooManyStreams(self._max_agent, agent=True)
             stream = Stream(loop, self._seq)
             self._streams.add(stream)
             if follow:
                 self._followers.add(stream)
+            if agent:
+                self._agent.add(stream)
         return stream
 
     def close_stream(self, stream: Stream) -> None:
         with self._lock:
             self._streams.discard(stream)
             self._followers.discard(stream)
+            self._agent.discard(stream)
 
     def close(self) -> None:
         """The daemon is stopping: wake every open stream so it ends (after sending what it
@@ -152,7 +171,3 @@ class EventBus:
     @property
     def closed(self) -> bool:
         return self._closed
-
-    @property
-    def max_streams(self) -> int:
-        return self._max

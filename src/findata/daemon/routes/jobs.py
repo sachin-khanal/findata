@@ -32,8 +32,11 @@ DEFAULT_SANDBOX_USER = "user_transactions_dynamic"
 
 router = APIRouter(prefix="/v1/jobs")
 
-SANDBOX_LINK_JOB = "sandbox-link"  # at most one of these runs at a time
-HISTORY_JOB = "history"  # at most one of these runs at a time per Item
+SANDBOX_LINK_JOB = "sandbox-link"
+HISTORY_JOB = "history"
+# One running job at a time across both kinds: each holds a worker thread and a database
+# connection while it waits, and two of them would poll the same Item at Plaid twice as often.
+PLAID_JOB = "plaid-job"
 
 Emit = Callable[[dict], None]
 
@@ -171,12 +174,12 @@ def history_job(
         )
 
 
-def _already_running(what: str, job_id: str) -> DaemonError:
+def _already_running(job_id: str) -> DaemonError:
     return DaemonError(
         409,
         "JOB_ALREADY_RUNNING",
-        f"{what} is already running; follow it (GET /v1/jobs/{{job_id}}/events) instead of "
-        "starting another.",
+        "A sandbox-link or history job is already running (one at a time); follow it "
+        "(GET /v1/jobs/{job_id}/events) instead of starting another.",
         job_id=job_id,
     )
 
@@ -195,11 +198,11 @@ def start_sandbox_link(body: SandboxLinkIn, state: StateDep, gateway: GatewayDep
             lambda emit: sandbox_link_job(
                 runtime, gateway, state.events, body, emit, state.job_sleep, state.job_clock
             ),
-            exclusive=SANDBOX_LINK_JOB,
+            exclusive=PLAID_JOB,
             labels={"kind": SANDBOX_LINK_JOB},
         )
     except JobAlreadyRunning as exc:
-        raise _already_running("A sandbox-link job", exc.job_id) from None
+        raise _already_running(exc.job_id) from None
     return {"job_id": job_id}
 
 
@@ -215,11 +218,11 @@ def start_history(
             lambda emit: history_job(
                 runtime, gateway, state.events, body.item_id, emit, state.job_sleep, state.job_clock
             ),
-            exclusive=f"{HISTORY_JOB}:{body.item_id}",
+            exclusive=PLAID_JOB,
             labels={"kind": HISTORY_JOB, "item_id": body.item_id},
         )
     except JobAlreadyRunning as exc:
-        raise _already_running("A history job for this item", exc.job_id) from None
+        raise _already_running(exc.job_id) from None
     return {"job_id": job_id}
 
 

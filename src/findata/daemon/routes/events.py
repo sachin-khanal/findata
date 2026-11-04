@@ -15,7 +15,8 @@ from fastapi import APIRouter, Query
 from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
-from findata.daemon.deps import DaemonError, DaemonState, StateDep, require
+from findata.daemon.auth import Role
+from findata.daemon.deps import DaemonError, DaemonState, RoleDep, StateDep, require
 from findata.daemon.events import (
     GAP_LINE,
     KEEPALIVE_LINE,
@@ -46,16 +47,21 @@ class NdjsonStream(StreamingResponse):
             await self._lines.aclose()  # ends a generator left waiting at a `yield`
 
 
-def _open(state: DaemonState, *, follow: bool) -> Stream:
+def _open(state: DaemonState, role: Role, *, follow: bool) -> Stream:
     try:
-        return state.events.open_stream(follow=follow)
-    except TooManyStreams:
-        raise DaemonError(
-            503,
-            "TOO_MANY_STREAMS",
-            f"The daemon already serves {state.events.max_streams} event streams, the most it "
-            "allows at once; close one and try again.",
-        ) from None
+        return state.events.open_stream(follow=follow, agent=role == "mcp")
+    except TooManyStreams as exc:
+        if exc.agent:
+            detail = (
+                f"The agent (mcp) role already has {exc.limit} event streams open, the most it "
+                "may hold at once; close one and try again."
+            )
+        else:
+            detail = (
+                f"The daemon already serves {exc.limit} event streams, the most it allows at "
+                "once; close one and try again."
+            )
+        raise DaemonError(503, "TOO_MANY_STREAMS", detail) from None
 
 
 async def _daemon_lines(state: DaemonState, stream: Stream, after: int) -> AsyncGenerator[bytes]:
@@ -73,12 +79,13 @@ async def _daemon_lines(state: DaemonState, stream: Stream, after: int) -> Async
 @router.get("/events", name="events")
 async def follow_events(
     state: StateDep,
+    role: RoleDep,
     after: int | None = Query(None, ge=0, description="resume after this seq"),
 ) -> NdjsonStream:
     """Daemon events as `{"seq", "event", "at", ...}` lines. Without `after`, only those
     published from now on; with it, first the buffered ones after that seq (a `gap` line
     first if some of them are gone)."""
-    stream = _open(state, follow=True)
+    stream = _open(state, role, follow=True)
     start = stream.opened_after if after is None else after
     return NdjsonStream(
         _daemon_lines(state, stream, start), lambda: state.events.close_stream(stream)
@@ -104,10 +111,10 @@ async def _job_lines(state: DaemonState, job_id: str, stream: Stream) -> AsyncGe
 
 
 @router.get("/jobs/{job_id}/events", name="jobs.events")
-async def follow_job(job_id: str, state: StateDep) -> NdjsonStream:
+async def follow_job(job_id: str, state: StateDep, role: RoleDep) -> NdjsonStream:
     """The job's events so far, then each new one as it happens (the same dicts as
     `GET /v1/jobs/{id}`), then `job_finished`; then the stream ends."""
-    stream = _open(state, follow=False)
+    stream = _open(state, role, follow=False)
     try:
         state.jobs.watch(job_id, stream.wake)
     except KeyError:
