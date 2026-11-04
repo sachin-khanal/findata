@@ -228,11 +228,13 @@ Added 2026-11-04. Task 7b's implementer found an intermittent segfault in `tests
 - No new public interface is required. Keep: one writer per Item (`PLAID_WRITE_LOCK` semantics), an audit row for every request, and — if the fix serializes database access — no connection or transaction held across a Plaid network call or a job's sleep, so one slow Plaid call cannot stall every request.
 - Root cause first (systematic debugging): reproduce with a minimal script (several threads, separate sessions, a file SQLCipher database from `make_engine`, concurrent commits) and capture the crashing threads' stacks with `faulthandler`. Write the cause and the evidence into the report before changing code. If the fault is inside sqlcipher3 or SQLCipher, check whether a current release fixes it; if none does, serialize database access within the process (for example, one pooled connection used by one thread at a time and released between transactions) instead of relying on per-thread connections.
 
-- [ ] **Step 1: Write a failing stress test** `tests/test_db_concurrency.py::test_concurrent_job_commits_and_audit_writes_never_crash` that runs the workload in a subprocess, so a segfault fails the test instead of killing pytest: several threads doing sync-style commits, audit inserts and reads on one file database for a fixed number of iterations; assert exit code 0 and no "database is locked" errors. If the fix serializes access, add `test_no_connection_is_held_during_plaid_calls_or_job_sleeps`.
-- [ ] **Step 2: Run** it; expected FAIL (crash) on the current code. If it does not crash reliably, raise the iteration count until it does and record the rate.
-- [ ] **Step 3: Fix** according to the root cause.
-- [ ] **Step 4: Run** `uv run pytest -q` 20 times in a row; expected: no crash and no failure in any run. Put the loop and its result in the report.
-- [ ] **Step 5: Commit** `git commit -m "Make concurrent database access in the daemon crash-free"`
+- [x] **Step 1: Write a failing stress test** `tests/test_db_concurrency.py::test_concurrent_job_commits_and_audit_writes_never_crash` that runs the workload in a subprocess, so a segfault fails the test instead of killing pytest: several threads doing sync-style commits, audit inserts and reads on one file database for a fixed number of iterations; assert exit code 0 and no "database is locked" errors. If the fix serializes access, add `test_no_connection_is_held_during_plaid_calls_or_job_sleeps`.
+- [x] **Step 2: Run** it; expected FAIL (crash) on the current code. If it does not crash reliably, raise the iteration count until it does and record the rate.
+- [x] **Step 3: Fix** according to the root cause.
+- [x] **Step 4: Run** `uv run pytest -q` 20 times in a row; expected: no crash and no failure in any run. Put the loop and its result in the report.
+- [x] **Step 5: Commit** `git commit -m "Make concurrent database access in the daemon crash-free"`
+
+**Done:** dd9ec8a. Root cause: the pysqlcipher dialect's default SingletonThreadPool closes connections other threads are using; file databases now use QueuePool. No serializing lock was needed, so the conditional test in Step 1 does not apply (ruling R26).
 
 ### Task 7d: Daemon event streams instead of polling
 
