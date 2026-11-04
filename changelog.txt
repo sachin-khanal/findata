@@ -19,8 +19,20 @@ c75adf2  2026-10-21  [feature/alembic-migrations] Add Alembic schema migrations 
 a2e2a87  2026-10-21  [design/daemon-architecture] Add design doc for a daemon-centred architecture: `findata start` owns key/DB/Plaid, `serve web` and `serve mcp` are front ends that get all data (incl. CLI) through the daemon.
 1c5ae20  2026-10-21  [design/daemon-architecture] Design: MCP role is read-only by default and write tools need a time-limited, user-present grant (agent cannot self-grant; all grants audited).
 937b396  2026-10-21  [design/daemon-architecture] Design: `findata start` runs in the foreground by default; `--background` detaches it (log file, status/stop work either way).
+f1fe53d  2026-10-21  [main]  Merge design/daemon-architecture into main: the daemon-centred architecture design (start, serve web, serve mcp; read-only MCP role with user-present write grants).
 edf07f4  2026-10-21  [plan/daemon-architecture] Add the 13-task implementation plan for the daemon architecture (audit log migration 0002, roles/grants, DaemonClient, CLI/web/MCP as clients, boundary test); spec already merged as f1fe53d.
 cc242c1  2026-10-21  [plan/daemon-architecture] Plan: fix the boundary-test file list (drop a nonexistent module, note commands/daemon.py exclusion).
+de9510d  2026-10-21  [main]  Merge plan/daemon-architecture into main: the 13-task implementation plan for the daemon-centred architecture.
+e79e2db  2026-10-21  [feature/daemon-architecture] Plan Task 1: extract shared wire models (wire.py), data-dir Locations and owner-only file helpers (privfs.py) so front ends can run without the key or DB stack.
+a1a32be  2026-10-21  [feature/daemon-architecture] Plan Task 2: daemon roles web/cli/mcp with their permissions (mcp read-only) and one owner-only credential file per role.
+37b89e9  2026-10-21  [feature/daemon-architecture] Plan Task 3: in-memory, time-limited write grants for the agent and single-use, expiring approvals for item removal; a daemon restart clears both.
+88c2a96  2026-10-21  [feature/daemon-architecture] Plan Task 4: the daemon's /v1 API with role checks on every route, grant-gated agent writes, per-removal approvals, a process-wide Plaid write lock, and an audit_log table (migration 0002) recording every request.
+aef51e9  2026-10-21  [feature/daemon-architecture] Task 4 review fixes: the agent can no longer remove an item local-only (which skips revoking it at Plaid), and unhandled exception messages are kept out of the daemon log.
+bd362dc  2026-10-21  [feature/daemon-architecture] Plan Task 5: `findata start` with a per-data-dir lock that survives kill -9, an owner-only Unix-socket server and an empty scheduler hook; `stop`/`status` moved to Task 8 (ruling R2).
+d22e2ae  2026-10-21  [feature/daemon-architecture] Plan Task 6: typed DaemonClient for the CLI and front ends, with explicit DaemonNotRunning and DaemonRejected errors; httpx2 moves from the dev group to runtime dependencies.
+31c55c2  2026-10-21  [feature/daemon-architecture] Task 6 review fixes: long timeouts for Plaid-backed calls plus DaemonTimeout, a lock probe before the Windows TCP fallback sends a credential, and quoted URL path segments.
+310ff4a  2026-10-21  [feature/daemon-architecture] Plan Task 7: sandbox-link runs as a daemon job (POST /v1/jobs/sandbox-link, GET /v1/jobs/{id}) emitting the same events as the CLI does today.
+b8e7790  2026-10-21  [feature/daemon-architecture] Task 7 review fixes: 503 before a job is created when Plaid keys are missing, starting a job needs both link and sync, the write lock is held per sync pass rather than across sleeps, one running job at a time (409 otherwise), and a BaseException fails the job and frees the slot.
 
-Uncommitted changes: changelog.txt (entries for edf07f4 and cc242c1).
-Branch notes: main contains the merged design (f1fe53d); plan/daemon-architecture (edf07f4, cc242c1) holds the implementation plan and is not merged; earlier feature branches were merged and still exist locally; scaffold/plaid-sync remains from PR #1.
+Uncommitted changes: changelog.txt (entries for f1fe53d, de9510d and e79e2db..b8e7790); docs/superpowers/plans/2026-10-21-daemon-architecture.md (Tasks 1–7 ticked); .claude/settings.json and .claude/hooks/changelog-reminder.sh (same changelog-hook fix as on main).
+Branch notes: feature/daemon-architecture holds plan Tasks 1–7, not merged or pushed; Task 7's review fixes (b8e7790) have not been re-reviewed yet; Tasks 8–13 not started. main has the design (f1fe53d) and plan (de9510d).

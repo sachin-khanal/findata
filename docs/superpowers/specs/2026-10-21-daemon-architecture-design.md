@@ -107,15 +107,45 @@ stopped).
 - Writes by the mcp role (sync, link, remove, and any later write) are off until a human
   turns them on. The agent can ask for access but can never grant it to itself: the grant is
   made through a human channel the agent has no credential for.
-- *(My guess at the mechanism, to confirm: the user runs `findata grant mcp-write` in a
-  terminal, or approves a pending request in the web UI. The grant is time-limited, defaults
-  to a short window, names the operations it covers, and can be revoked with
-  `findata revoke mcp-write`. Item removal additionally needs a fresh confirmation each
-  time.)*
+- *(Decided by the user, 2026-11-04.)* The user runs `findata grant mcp-write` in a terminal
+  (or uses the web UI). The grant is time-limited, defaults to a short window, names the
+  operations it covers, and can be revoked with `findata revoke mcp-write`. Item removal
+  additionally needs a fresh approval each time (`findata approve <id>` or the web UI).
 - The daemon stores grants, checks them on every write, lets them expire on their own, and
   clears them when it stops. Granting, using and revoking are all written to the audit log.
 - An agent write attempt without a grant fails with a specific error that tells the agent a
   human must authorize it. Nothing is queued or retried silently.
+
+### User presence for human-authority operations (decided by the user, 2026-11-04)
+
+Role credentials alone do not stop an agent that can run shell commands as the user: it can
+read the `cli` credential file, or run `findata grant` and `findata items rm` itself. On macOS
+(the first platform), the daemon therefore asks for the user's presence (Touch ID, or the
+login password when Touch ID is unavailable) before it acts on the operations that carry human
+authority, and the limits of that protection are documented.
+
+- **Checked by the daemon, not the front end,** so calling the socket directly with the `cli`
+  or `web` credential still brings up the prompt on the Mac.
+- **Which operations** *(builder's call, change if wanted):* creating a grant, approving a
+  pending agent request, and removing an Item as `cli` or `web`. Not reads, sync, link,
+  revoke, status or stop: revoking only ever reduces access, and the rest do not widen the
+  agent's access or destroy anything. An agent's own removal needs no prompt because the
+  approval it consumes was already confirmed in person.
+- **The prompt says what is being approved,** for example "allow the findata agent to sync and
+  remove items for 15 minutes" or "remove First Platypus Bank and its local data". It never
+  contains secrets or transaction data.
+- **A cancelled, failed or timed-out prompt refuses the operation** with
+  `USER_PRESENCE_REQUIRED` and changes nothing. The outcome of every check is audited.
+- **Where no prompt is possible** *(builder's call):* on macOS without a login session that can
+  show one (for example over SSH) the operation is refused with a message saying so. On Linux
+  and Windows, which have no equivalent here yet, the operations are allowed and the daemon
+  reports and audits presence as unsupported.
+- **Residual limits, documented in ADR 0004 and the README:** this stops an agent from using
+  the CLI or the socket to act with human authority. It does not stop a process that can
+  change findata's code, stop the daemon and run its own, or read the user's keychain. Agents
+  that must not be trusted that far need to run sandboxed, without access to `~/.findata` or
+  the findata source.
+
 ### Web front end (`findata serve web`)
 
 - Serves the existing UI on 127.0.0.1:8765 and keeps the existing browser protections (token
@@ -171,7 +201,9 @@ stopped).
 - Writing launchd/systemd service files is out of scope (the foreground mode is what they
   would run). Foreground default and the `--background` flag are the user's decision.
 - *(Revised by the user: the mcp role is read-only by default; writes need user-present
-  authorization. The grant mechanism above is my guess and still to be confirmed.)*
+  authorization. The grant mechanism and Touch ID for human-authority operations were
+  confirmed by the user on 2026-11-04; which operations prompt, and the no-prompt-possible
+  behaviour, are the builder's calls above.)*
 - Unix socket only on macOS and Linux; loopback with credential on Windows if needed.
 - Audit log is a database table (migration 0002), not a text file.
 - The old `findata serve` stops starting a server and becomes the parent of `serve web` and

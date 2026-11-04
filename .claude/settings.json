@@ -6,10 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(git commit *)",
             "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/changelog-reminder.sh\"",
-            "timeout": 10,
-            "statusMessage": "Checking changelog.txt..."
+            "timeout": 10
           }
         ]
       }
