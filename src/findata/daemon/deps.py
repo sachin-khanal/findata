@@ -12,7 +12,7 @@ import datetime as dt
 import logging
 import threading
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from findata.daemon.audit import SCOPE_KEY, AuditLog, RequestAudit
 from findata.daemon.auth import ROLE_PERMISSIONS, CredentialStore, Permission, Role
+from findata.daemon.events import KEEPALIVE_S, EventBus
 from findata.daemon.grants import GRANTABLE, ApprovalStore, GrantStore
 from findata.daemon.jobs import JobManager
 from findata.daemon.presence import Presence, PresenceChecker
@@ -57,9 +58,11 @@ class DaemonState:
     clock: Callable[[], dt.datetime]
     on_shutdown: Callable[[], None] | None
     presence: PresenceChecker
-    jobs: JobManager = field(default_factory=JobManager)
+    events: EventBus
+    jobs: JobManager
     job_sleep: Callable[[float], None] | None = None
     job_clock: Callable[[], float] | None = None
+    keepalive_s: float = KEEPALIVE_S  # how long a silent stream waits before a keep-alive
 
 
 def get_state(request: Request) -> DaemonState:

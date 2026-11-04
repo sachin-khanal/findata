@@ -10,6 +10,21 @@ from pydantic import BaseModel, Field
 
 MAX_GRANT_TTL_S = 86_400  # a write grant lasts at most a day
 
+# How a job waits for an Item's history by default (a sandbox-link request may choose its
+# own): a sync every WAIT_INTERVAL_S until the history has loaded, for at most WAIT_TIMEOUT_S.
+WAIT_TIMEOUT_S = 120.0
+WAIT_INTERVAL_S = 5.0
+
+# Event streams (`GET /v1/events`, `GET /v1/jobs/{id}/events`) are NDJSON: one JSON object per
+# line. Besides events, a stream sends `{"event": KEEPALIVE_EVENT}` after a while without any,
+# and `{"event": GAP_EVENT}` when events a client asked for are no longer buffered (it should
+# re-read the state it shows). A job's stream ends with `{"event": JOB_FINISHED_EVENT, "state",
+# "result"}`.
+NDJSON = "application/x-ndjson"
+KEEPALIVE_EVENT = "keepalive"
+GAP_EVENT = "gap"
+JOB_FINISHED_EVENT = "job_finished"
+
 # How the daemon confirms a human-authority operation: Touch ID or the password on macOS, or
 # no check on platforms that have none yet.
 PresenceKind = Literal["touch_id", "unsupported"]
@@ -86,8 +101,12 @@ class SandboxLinkIn(BaseModel):
     username: str | None = None
     new: bool = False
     wait: bool = True
-    timeout: float = Field(120.0, ge=0, le=3600)
-    interval: float = Field(5.0, ge=0.5, le=60)
+    timeout: float = Field(WAIT_TIMEOUT_S, ge=0, le=3600)
+    interval: float = Field(WAIT_INTERVAL_S, ge=0.5, le=60)
+
+
+class HistoryJobIn(BaseModel):
+    item_id: str
 
 
 class JobOut(BaseModel):

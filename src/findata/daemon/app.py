@@ -19,7 +19,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from findata.daemon.audit import ANONYMOUS, SCOPE_KEY, AuditLog, AuditMiddleware
 from findata.daemon.auth import CredentialStore
 from findata.daemon.deps import DaemonError, DaemonState, resolve_role
+from findata.daemon.events import KEEPALIVE_S, EventBus
 from findata.daemon.grants import ApprovalStore, GrantStore
+from findata.daemon.jobs import JobManager
 from findata.daemon.presence import PresenceChecker
 from findata.daemon.routes import ROUTERS
 from findata.plaid_gateway import PlaidError
@@ -96,7 +98,11 @@ def create_daemon_app(
     on_shutdown: Callable[[], None] | None = None,
     job_sleep: Callable[[float], None] | None = None,
     job_clock: Callable[[], float] | None = None,
+    events: EventBus | None = None,
+    keepalive_s: float = KEEPALIVE_S,
 ) -> FastAPI:
+    """The daemon's app. `events` is the bus its streams follow; pass the one `grants` and
+    `approvals` publish to (None gives the app a bus of its own)."""
     app = FastAPI(
         title="findata daemon",
         docs_url=None,
@@ -104,6 +110,7 @@ def create_daemon_app(
         openapi_url=None,
         redirect_slashes=False,
     )
+    events = EventBus(clock=clock) if events is None else events
     app.state.daemon = DaemonState(
         runtime=runtime,
         credentials=credentials,
@@ -114,8 +121,11 @@ def create_daemon_app(
         clock=clock,
         on_shutdown=on_shutdown,
         presence=presence,
+        events=events,
+        jobs=JobManager(events=events),
         job_sleep=job_sleep,
         job_clock=job_clock,
+        keepalive_s=keepalive_s,
     )
     _install_error_handlers(app)
     app.add_middleware(AuditMiddleware, audit=audit)

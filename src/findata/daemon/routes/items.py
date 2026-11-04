@@ -39,12 +39,12 @@ def describe_item(item: Item | None) -> str:
     return name or "a linked bank"
 
 
-def _pending_request(approvals: ApprovalStore, item_id: str) -> str:
-    """The open request to remove `item_id`, or a new one (retries never pile up requests)."""
+def _pending_request(approvals: ApprovalStore, item: Item) -> str:
+    """The open request to remove `item`, or a new one (retries never pile up requests)."""
     for p in approvals.pending():
-        if p["operation"] == REMOVE and p["subject"] == item_id:
+        if p["operation"] == REMOVE and p["subject"] == item.id:
             return p["request_id"]
-    return approvals.request(REMOVE, item_id)
+    return approvals.request(REMOVE, item.id, institution=item.institution_name)
 
 
 @router.delete("/items/{item_id}", name=REMOVE, status_code=204, dependencies=[require(REMOVE)])
@@ -68,7 +68,7 @@ def remove(
     if item is None:
         raise DaemonError(404, "NOT_FOUND", f"No linked item has id {item_id!r}.")
     if role == "mcp" and not (request_id and state.approvals.consume(request_id, REMOVE, item_id)):
-        rid = _pending_request(state.approvals, item_id)
+        rid = _pending_request(state.approvals, item)
         raise DaemonError(
             403,
             "CONFIRMATION_REQUIRED",
@@ -79,6 +79,8 @@ def remove(
         )
     gateway = None if local_only else get_gateway(state)
     confirm_presence(f"remove {describe_item(item)} and its local data")
+    institution = item.institution_name
     with PLAID_WRITE_LOCK:
         remove_item(session, gateway, state.runtime.cipher, item, local_only=local_only)
+    state.events.publish("item_removed", item_id=item_id, institution=institution)
     return Response(status_code=204)

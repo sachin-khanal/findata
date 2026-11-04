@@ -7,7 +7,9 @@ and the `Role` type, so it never loads the key, database or Plaid stack.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
+from collections.abc import Iterator
 from typing import Any
 from urllib.parse import quote
 
@@ -26,6 +28,8 @@ from findata.daemon.auth import Role
 from findata.locations import Locations
 from findata.privfs import read_secret_file
 from findata.wire import (
+    JOB_FINISHED_EVENT,
+    KEEPALIVE_EVENT,
     AccountOut,
     GrantOut,
     ItemOut,
@@ -54,6 +58,25 @@ def _seg(value: str) -> str:
 
 def _list_of(model: type) -> TypeAdapter:
     return TypeAdapter(list[model])
+
+
+def _timed_out(seconds: float) -> DaemonTimeout:
+    return DaemonTimeout(
+        f"The findata daemon did not answer within {seconds:g} s; the operation may still be "
+        "running. Check `findata status` before retrying."
+    )
+
+
+def _event(line: str, status: int) -> dict:
+    try:
+        event = json.loads(line)
+    except ValueError:
+        event = None
+    if not isinstance(event, dict):
+        raise DaemonRejected(
+            "BAD_RESPONSE", "The daemon sent a stream line that is not a JSON object.", status
+        )
+    return event
 
 
 class DaemonClient:
@@ -144,16 +167,64 @@ class DaemonClient:
                 **kwargs,
             )
         except httpx2.TimeoutException:
-            raise DaemonTimeout(
-                f"The findata daemon did not answer within "
-                f"{effective:g} s; the operation may "
-                "still be running. Check `findata status` before retrying."
-            ) from None
+            raise _timed_out(effective) from None
         except (httpx2.TransportError, FileNotFoundError, ConnectionRefusedError):
             raise DaemonNotRunning(NOT_RUNNING_MESSAGE) from None
         if response.is_success:
             return response
         raise self._rejection(response)
+
+    def _stream(
+        self, path: str, *, params: dict[str, Any] | None = None, until: str | None = None
+    ) -> Iterator[dict]:
+        """Open an NDJSON stream now, so a refusal or a stopped daemon raises here as for any
+        other call, and return an iterator over its objects with keep-alives skipped.
+
+        Only the connect (and write) timeout applies: a stream may rightly be idle for as long
+        as nothing happens. With `until`, the iterator ends after that event and raises
+        DaemonNotRunning if the stream ends without it. Closing the iterator, or reaching its
+        end, closes the connection.
+        """
+        lines = self._stream_lines(path, params, until)
+        next(lines)  # runs up to the response's arrival; the generator closes the stream
+        return lines
+
+    def _stream_lines(
+        self, path: str, params: dict[str, Any] | None, until: str | None
+    ) -> Iterator[dict]:
+        credential = self._credential_value()
+        http = self._connect()
+        timeout = httpx2.Timeout(self._timeout, read=None)
+        try:
+            with http.stream(
+                "GET",
+                path,
+                params=params,
+                headers={CREDENTIAL_HEADER: credential},
+                extensions={"timeout": timeout.as_dict()},
+            ) as response:
+                if not response.is_success:
+                    response.read()
+                    raise self._rejection(response)
+                yield {}  # the stream is open; `_stream` drops this one
+                for line in response.iter_lines():
+                    if not line:
+                        continue
+                    event = _event(line, response.status_code)
+                    if event.get("event") == KEEPALIVE_EVENT:
+                        continue
+                    yield event
+                    if until is not None and event.get("event") == until:
+                        return
+        except httpx2.TimeoutException:
+            raise _timed_out(self._timeout) from None
+        except (httpx2.TransportError, FileNotFoundError, ConnectionRefusedError):
+            raise DaemonNotRunning(NOT_RUNNING_MESSAGE) from None
+        if until is not None:
+            raise DaemonNotRunning(
+                "The findata daemon stopped before the job finished; the job did not survive "
+                "it. Start the daemon with `findata start` and run the command again."
+            )
 
     @staticmethod
     def _rejection(response: httpx2.Response) -> DaemonRejected:
@@ -259,6 +330,22 @@ class DaemonClient:
 
     def job(self, job_id: str, *, timeout: float | None = None) -> JobOut:
         return JobOut.model_validate(self._json("GET", f"/v1/jobs/{_seg(job_id)}", timeout=timeout))
+
+    # ---------- streams (open until they end; no read timeout between events) ----------
+
+    def follow_job(self, job_id: str) -> Iterator[dict]:
+        """The job's events as they happen, those recorded so far first, ending with
+        `{"event": "job_finished", "state", "result"}`. DaemonNotRunning if the daemon stops
+        before the job finishes."""
+        return self._stream(f"/v1/jobs/{_seg(job_id)}/events", until=JOB_FINISHED_EVENT)
+
+    def events(self, after: int | None = None) -> Iterator[dict]:
+        """Daemon events as they happen, as `{"seq", "event", "at", ...}`. Without `after`,
+        those published from now on; with it, first the ones after that seq still buffered
+        (`{"event": "gap"}` first if some are gone: re-read what you show). Ends when the
+        daemon stops."""
+        params = {} if after is None else {"after": after}
+        return self._stream("/v1/events", params=params)
 
     # ---------- human controls ----------
     # The daemon asks for Touch ID or the password before a grant or an approval and waits up

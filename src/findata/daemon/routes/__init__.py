@@ -3,6 +3,6 @@
 Each route's `name` is the operation recorded in the audit log.
 """
 
-from findata.daemon.routes import audit, data, grants, items, jobs, link, status, sync
+from findata.daemon.routes import audit, data, events, grants, items, jobs, link, status, sync
 
-ROUTERS = tuple(m.router for m in (status, data, sync, link, jobs, items, grants, audit))
+ROUTERS = tuple(m.router for m in (status, data, sync, link, jobs, events, items, grants, audit))

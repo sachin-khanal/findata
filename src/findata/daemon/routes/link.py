@@ -26,4 +26,5 @@ def exchange(
 ) -> ItemOut:
     with PLAID_WRITE_LOCK:
         item = link_item(session, gateway, state.runtime.cipher, body.public_token)
+    state.events.publish("item_linked", item_id=item.id, institution=item.institution_name)
     return item_out(next(s for s in queries.list_item_summaries(session) if s.item.id == item.id))

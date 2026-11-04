@@ -1,87 +1,89 @@
-"""Long-running jobs: link a Plaid Sandbox bank and wait for its history, polled by job id."""
+"""Long-running jobs: link a Plaid Sandbox bank and wait for its history, or wait for the
+history of a bank already linked. Clients follow a job by id (`GET /v1/jobs/{id}/events`)."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
 from fastapi import APIRouter
+from sqlalchemy.orm import Session
 
-from findata.daemon.deps import PLAID_WRITE_LOCK, DaemonError, GatewayDep, StateDep, require
+from findata.daemon.deps import (
+    PLAID_WRITE_LOCK,
+    DaemonError,
+    GatewayDep,
+    SessionDep,
+    StateDep,
+    require,
+)
+from findata.daemon.events import EventBus
 from findata.daemon.jobs import JobAlreadyRunning
+from findata.daemon.routes.sync import publish_sync_completed
+from findata.db import Item
 from findata.linking import find_sandbox_item, link_sandbox_item
 from findata.plaid_gateway import PlaidGateway
 from findata.runtime import Runtime
+from findata.security import FieldCipher
 from findata.sync import sync_item
 from findata.waiting import wait_for_history
-from findata.wire import JobOut, SandboxLinkIn
+from findata.wire import WAIT_INTERVAL_S, WAIT_TIMEOUT_S, HistoryJobIn, JobOut, SandboxLinkIn
 
 DEFAULT_SANDBOX_USER = "user_transactions_dynamic"
 
 router = APIRouter(prefix="/v1/jobs")
 
 SANDBOX_LINK_JOB = "sandbox-link"  # at most one of these runs at a time
+HISTORY_JOB = "history"  # at most one of these runs at a time per Item
 
 Emit = Callable[[dict], None]
 
 
-def sandbox_link_job(
-    runtime: Runtime,
+def _wait_phase(
+    session: Session,
     gateway: PlaidGateway,
-    body: SandboxLinkIn,
+    cipher: FieldCipher,
+    events: EventBus,
+    item: Item,
     emit: Emit,
+    *,
+    timeout: float,
+    interval: float,
     sleep: Callable[[float], None] | None,
     clock: Callable[[], float] | None,
 ) -> dict:
-    """The old `sandbox-link` CLI flow, with the same events; returns the job's result."""
-    username = body.username or DEFAULT_SANDBOX_USER
-    cipher = runtime.cipher
-    # The write lock is held for each Plaid/DB write step, never across the sleeps between
-    # polls, so a long wait cannot starve /v1/sync, link exchange or item removal.
-    with runtime.session_factory() as session:
-        with PLAID_WRITE_LOCK:
-            item = None if body.new else find_sandbox_item(session)
-            if item is not None:
-                emit({"event": "reused", "item_id": item.id, "institution": item.institution_name})
-            else:
-                emit({"event": "linking", "username": username})
-                item = link_sandbox_item(session, gateway, cipher, username)
-                emit({"event": "linked", "item_id": item.id, "institution": item.institution_name})
-            if not body.wait:
-                r = sync_item(session, gateway, cipher, item)
-                done = {
-                    "added": r.added,
-                    "status": r.status,
-                    "history_complete": r.history_complete,
-                    "timed_out": False,
-                }
-                emit({"event": "done", **done})
-                return done
+    """Sync `item` until its history has loaded or `timeout` passes, emitting the `waiting`,
+    `poll` and `done` events the CLI has always printed; returns the job's result.
 
-        def progress(n, r, elapsed):
-            emit(
-                {
-                    "event": "poll",
-                    "attempt": n,
-                    "elapsed_s": round(elapsed, 1),
-                    "added": r.added,
-                    "status": r.status,
-                    "history_complete": r.history_complete,
-                }
-            )
+    The write lock is held for each sync pass, never across the sleeps between passes, so a
+    long wait cannot starve /v1/sync, link exchange or item removal.
+    """
 
-        emit({"event": "waiting", "interval_s": body.interval, "timeout_s": body.timeout})
-        out = wait_for_history(
-            session,
-            gateway,
-            cipher,
-            item,
-            timeout=body.timeout,
-            interval=body.interval,
-            on_poll=progress,
-            sleep=sleep,
-            clock=clock,
-            guard=PLAID_WRITE_LOCK,
+    def progress(n, r, elapsed):
+        emit(
+            {
+                "event": "poll",
+                "attempt": n,
+                "elapsed_s": round(elapsed, 1),
+                "added": r.added,
+                "status": r.status,
+                "history_complete": r.history_complete,
+            }
         )
+        publish_sync_completed(events, r)
+
+    emit({"event": "waiting", "interval_s": interval, "timeout_s": timeout})
+    out = wait_for_history(
+        session,
+        gateway,
+        cipher,
+        item,
+        timeout=timeout,
+        interval=interval,
+        on_poll=progress,
+        sleep=sleep,
+        clock=clock,
+        guard=PLAID_WRITE_LOCK,
+    )
     done = {
         "added": out.added,
         "status": out.status,
@@ -91,6 +93,92 @@ def sandbox_link_job(
     }
     emit({"event": "done", **done})
     return done
+
+
+def sandbox_link_job(
+    runtime: Runtime,
+    gateway: PlaidGateway,
+    events: EventBus,
+    body: SandboxLinkIn,
+    emit: Emit,
+    sleep: Callable[[float], None] | None,
+    clock: Callable[[], float] | None,
+) -> dict:
+    """The old `sandbox-link` CLI flow, with the same events; returns the job's result."""
+    username = body.username or DEFAULT_SANDBOX_USER
+    cipher = runtime.cipher
+    with runtime.session_factory() as session:
+        with PLAID_WRITE_LOCK:
+            item = None if body.new else find_sandbox_item(session)
+            if item is not None:
+                emit({"event": "reused", "item_id": item.id, "institution": item.institution_name})
+            else:
+                emit({"event": "linking", "username": username})
+                item = link_sandbox_item(session, gateway, cipher, username)
+                emit({"event": "linked", "item_id": item.id, "institution": item.institution_name})
+                events.publish("item_linked", item_id=item.id, institution=item.institution_name)
+            if not body.wait:
+                r = sync_item(session, gateway, cipher, item)
+        if not body.wait:
+            publish_sync_completed(events, r)
+            done = {
+                "added": r.added,
+                "status": r.status,
+                "history_complete": r.history_complete,
+                "timed_out": False,
+            }
+            emit({"event": "done", **done})
+            return done
+        return _wait_phase(
+            session,
+            gateway,
+            cipher,
+            events,
+            item,
+            emit,
+            timeout=body.timeout,
+            interval=body.interval,
+            sleep=sleep,
+            clock=clock,
+        )
+
+
+def history_job(
+    runtime: Runtime,
+    gateway: PlaidGateway,
+    events: EventBus,
+    item_id: str,
+    emit: Emit,
+    sleep: Callable[[float], None] | None,
+    clock: Callable[[], float] | None,
+) -> dict:
+    """Wait for an already-linked Item's history, exactly as the sandbox-link job's wait."""
+    with runtime.session_factory() as session:
+        item = session.get(Item, item_id)
+        if item is None:  # removed after the job was accepted: fails with the generic event
+            raise LookupError("item removed before its history job started")
+        return _wait_phase(
+            session,
+            gateway,
+            runtime.cipher,
+            events,
+            item,
+            emit,
+            timeout=WAIT_TIMEOUT_S,
+            interval=WAIT_INTERVAL_S,
+            sleep=sleep,
+            clock=clock,
+        )
+
+
+def _already_running(what: str, job_id: str) -> DaemonError:
+    return DaemonError(
+        409,
+        "JOB_ALREADY_RUNNING",
+        f"{what} is already running; follow it (GET /v1/jobs/{{job_id}}/events) instead of "
+        "starting another.",
+        job_id=job_id,
+    )
 
 
 # The job syncs as well as links, so starting one needs both permissions.
@@ -105,17 +193,33 @@ def start_sandbox_link(body: SandboxLinkIn, state: StateDep, gateway: GatewayDep
     try:
         job_id = state.jobs.start(
             lambda emit: sandbox_link_job(
-                runtime, gateway, body, emit, state.job_sleep, state.job_clock
+                runtime, gateway, state.events, body, emit, state.job_sleep, state.job_clock
             ),
             exclusive=SANDBOX_LINK_JOB,
+            labels={"kind": SANDBOX_LINK_JOB},
         )
     except JobAlreadyRunning as exc:
-        raise DaemonError(
-            409,
-            "JOB_ALREADY_RUNNING",
-            "A sandbox-link job is already running; poll it instead of starting another.",
-            job_id=exc.job_id,
-        ) from None
+        raise _already_running("A sandbox-link job", exc.job_id) from None
+    return {"job_id": job_id}
+
+
+@router.post("/history", name="jobs.history", status_code=202, dependencies=[require("sync")])
+def start_history(
+    body: HistoryJobIn, state: StateDep, gateway: GatewayDep, session: SessionDep
+) -> dict[str, str]:
+    if session.get(Item, body.item_id) is None:
+        raise DaemonError(404, "NOT_FOUND", f"No linked item has id {body.item_id!r}.")
+    runtime = state.runtime
+    try:
+        job_id = state.jobs.start(
+            lambda emit: history_job(
+                runtime, gateway, state.events, body.item_id, emit, state.job_sleep, state.job_clock
+            ),
+            exclusive=f"{HISTORY_JOB}:{body.item_id}",
+            labels={"kind": HISTORY_JOB, "item_id": body.item_id},
+        )
+    except JobAlreadyRunning as exc:
+        raise _already_running("A history job for this item", exc.job_id) from None
     return {"job_id": job_id}
 
 

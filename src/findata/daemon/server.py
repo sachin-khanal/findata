@@ -28,6 +28,7 @@ from findata.config import Settings
 from findata.daemon.app import create_daemon_app
 from findata.daemon.audit import AuditLog
 from findata.daemon.auth import CredentialStore
+from findata.daemon.events import EventBus
 from findata.daemon.grants import ApprovalStore, GrantStore
 from findata.daemon.lock import DaemonLock
 from findata.daemon.presence import PresenceChecker, default_presence
@@ -148,6 +149,19 @@ def _exit_on_signals(server: uvicorn.Server) -> Iterator[None]:
             signal.signal(sig, handler)
 
 
+class _DaemonServer(uvicorn.Server):
+    """Ends the open event streams as shutdown begins. Uvicorn waits up to
+    GRACEFUL_SHUTDOWN_S for every open response to finish, and a stream never would."""
+
+    def __init__(self, config: uvicorn.Config, events: EventBus) -> None:
+        super().__init__(config)
+        self._events = events
+
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        self._events.close()
+        await super().shutdown(sockets=sockets)
+
+
 def _uvicorn_config(app) -> uvicorn.Config:
     return uvicorn.Config(
         app,
@@ -195,18 +209,20 @@ def _serve(
     def request_exit() -> None:  # POST /v1/shutdown; `server` is assigned below, before serving
         server.should_exit = True
 
+    events = EventBus(clock=_utcnow)  # one bus: the stores publish to it, streams follow it
     app = create_daemon_app(
         runtime,
         credentials,
-        GrantStore(_utcnow),
-        ApprovalStore(_utcnow),
+        GrantStore(_utcnow, events=events),
+        ApprovalStore(_utcnow, events=events),
         AuditLog(runtime.session_factory, _utcnow),
         started_at=_utcnow(),
         clock=_utcnow,
         presence=presence,
         on_shutdown=request_exit,
+        events=events,
     )
-    server = uvicorn.Server(_uvicorn_config(app))
+    server = _DaemonServer(_uvicorn_config(app), events)
     listener = open_listener(locations, use_tcp=use_tcp)
     scheduler = Scheduler()
     try:
