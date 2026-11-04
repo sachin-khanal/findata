@@ -23,6 +23,7 @@ from findata.daemon.presence import MacPresence, UnsupportedPresence, default_pr
 from tests.conftest import ACCESS_TOKEN, FakeGateway, FakePresence
 from tests.test_client import _cred_dir
 from tests.test_daemon_api import _audit, _build, _error, _link_and_sync, _pages
+from tests.test_daemon_jobs import _finish, _start
 
 DENIED = (
     "Not confirmed at the Mac (Touch ID or password was cancelled or timed out). "
@@ -211,20 +212,7 @@ def test_reads_sync_link_jobs_revoke_status_and_shutdown_never_prompt(d, presenc
     for role, method, path, kw in calls:
         r = d.client.request(method, path, headers=d.as_[role], **kw)
         assert r.is_success, (role, method, path, r.text)
-
-    # A job and a request using SQLCipher at the same moment can crash the process (a known
-    # issue, not what this test is about): the job waits at the write lock until this request
-    # and its audit row are done, and is then waited for without requests.
-    with PLAID_WRITE_LOCK:
-        r = d.client.post("/v1/jobs/sandbox-link", headers=d.as_["cli"], json={"wait": False})
-    assert r.status_code == 202, r.text
-    job_id = r.json()["job_id"]
-    jobs = d.client.app.state.daemon.jobs
-    for _ in range(500):
-        if jobs.get(job_id).state != "running":
-            break
-        time.sleep(0.01)
-    job = d.client.get(f"/v1/jobs/{job_id}", headers=d.as_["cli"]).json()
+    job = _finish(d, _start(d, wait=False))
     assert job["state"] == "done", job
 
     assert d.client.post("/v1/shutdown", headers=d.as_["cli"]).status_code == 202

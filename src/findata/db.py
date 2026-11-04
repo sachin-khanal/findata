@@ -20,6 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy.pool import QueuePool, StaticPool
 from sqlalchemy.types import TypeDecorator
 
 from findata.security import create_private_file
@@ -157,9 +158,15 @@ def make_engine(db_path: Path | str, db_key: bytes) -> Engine:
     )
     kwargs: dict = {"connect_args": {"check_same_thread": False}}
     if in_memory:
-        from sqlalchemy.pool import StaticPool
-
         kwargs["poolclass"] = StaticPool
+    else:
+        # Not the pysqlcipher dialect's default, SingletonThreadPool: it keeps a connection per
+        # thread and, once more than five threads have connected, closes other threads'
+        # connections whether or not they are in use, which crashes the process mid-statement.
+        # The daemon's request, job and audit threads pass five quickly. A QueuePool connection
+        # is the caller's alone until returned, and with no overflow cap no caller waits for one.
+        kwargs["poolclass"] = QueuePool
+        kwargs["max_overflow"] = -1
     engine = create_engine(url, **kwargs)
     event.listen(engine, "connect", _sqlite_pragmas)
     try:
