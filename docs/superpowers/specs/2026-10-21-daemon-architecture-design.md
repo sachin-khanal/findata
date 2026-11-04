@@ -146,6 +146,31 @@ authority, and the limits of that protection are documented.
   that must not be trusted that far need to run sandboxed, without access to `~/.findata` or
   the findata source.
 
+### Events, not polling (decided by the user, 2026-11-04)
+
+The user's goal: as efficient and light on resources as possible, so findata's processes do
+not poll each other.
+
+- Long operations and state changes are pushed by the daemon as events. A client holds one
+  streaming request open and reacts to each event as it arrives; it never re-asks on a timer.
+- The daemon streams newline-delimited JSON, one event per line, over the existing socket API:
+  `GET /v1/events` for daemon-wide events and `GET /v1/jobs/{id}/events` for one job. An idle
+  stream carries only an occasional keep-alive line, so a client that went away is noticed,
+  and it holds no thread while idle.
+- The CLI prints a job's events as they arrive (the same `--json` lines as today). The web
+  server relays the daemon's events to the page over one streaming request that carries the
+  browser token, so the page updates when a sync finishes, a grant changes or the agent asks
+  for approval.
+- Waits inside the daemon block until something happens (a grant's expiry is a timer, a job's
+  end is a signal); nothing sleeps in a loop to check.
+- `start --background` learns that the daemon is ready from the daemon itself (a pipe the child
+  writes to once it is listening), not by probing it.
+- **What still polls, and why:** after a bank is linked, the daemon re-syncs with Plaid on a
+  bounded schedule until its history has loaded (every 5 s for up to 2 minutes by default).
+  Plaid only pushes through webhooks, which need a public HTTPS endpoint, and the daemon has
+  none by design. Removing this poll needs a webhook relay: a separate decision, because it
+  sends Item metadata to a second party.
+
 ### Web front end (`findata serve web`)
 
 - Serves the existing UI on 127.0.0.1:8765 and keeps the existing browser protections (token
