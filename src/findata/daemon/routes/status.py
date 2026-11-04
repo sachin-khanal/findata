@@ -27,6 +27,7 @@ def status(state: StateDep) -> StatusOut:
         schema_revision=current_revision(runtime.session_factory.kw["bind"]),
         started_at=state.started_at,
         uptime_s=(state.clock() - state.started_at).total_seconds(),
+        user_presence=state.presence.kind,
     )
 
 

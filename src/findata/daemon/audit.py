@@ -2,8 +2,9 @@
 
 What is recorded is deliberately narrow: the caller's role, the route's operation name, a
 summary made only of the HTTP method, the route template and the *names* of the query
-parameters the route declares, and the outcome. Never query values, request or response
-bodies, credentials, or transaction data.
+parameters the route declares (plus `presence=<outcome>` when the user was asked to confirm at
+the Mac), and the outcome. Never query values, request or response bodies, credentials, or
+transaction data.
 """
 
 from __future__ import annotations
@@ -76,9 +77,11 @@ class AuditLog:
 
 @dataclass
 class RequestAudit:
-    """Facts about one request that later stages fill in; the auth dependency sets `role`."""
+    """Facts about one request that later stages fill in: the auth dependency sets `role`,
+    the presence gate `presence` (the user-presence outcome, for gated operations only)."""
 
     role: str = ANONYMOUS
+    presence: str | None = None
 
 
 def outcome_for(status: int) -> str:
@@ -171,14 +174,16 @@ class AuditMiddleware:
                 await JSONResponse(INTERNAL_ERROR_BODY, status_code=500)(scope, receive, send)
         finally:
             with anyio.CancelScope(shield=True):  # a dropped client still gets audited
-                await self._record(scope, facts.role, status)
+                await self._record(scope, facts, status)
 
-    async def _record(self, scope: Scope, role: str, status: int) -> None:
+    async def _record(self, scope: Scope, facts: RequestAudit, status: int) -> None:
         operation = UNKNOWN_OPERATION
         try:
             operation, summary = summarize(scope)
+            if facts.presence is not None:  # set by the daemon's own gate, never by the client
+                summary += f" presence={facts.presence}"
             await run_in_threadpool(
-                self.audit.record, role, operation, summary, outcome_for(status)
+                self.audit.record, facts.role, operation, summary, outcome_for(status)
             )
         except Exception as exc:  # auditing must never fail the request
             # Only the operation name and error type: the message could echo SQL parameters.

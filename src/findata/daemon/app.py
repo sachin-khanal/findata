@@ -20,6 +20,7 @@ from findata.daemon.audit import ANONYMOUS, SCOPE_KEY, AuditLog, AuditMiddleware
 from findata.daemon.auth import CredentialStore
 from findata.daemon.deps import DaemonError, DaemonState, resolve_role
 from findata.daemon.grants import ApprovalStore, GrantStore
+from findata.daemon.presence import PresenceChecker
 from findata.daemon.routes import ROUTERS
 from findata.plaid_gateway import PlaidError
 from findata.runtime import Runtime
@@ -91,6 +92,7 @@ def create_daemon_app(
     *,
     started_at: dt.datetime,
     clock: Callable[[], dt.datetime],
+    presence: PresenceChecker,
     on_shutdown: Callable[[], None] | None = None,
     job_sleep: Callable[[float], None] | None = None,
     job_clock: Callable[[], float] | None = None,
@@ -111,6 +113,7 @@ def create_daemon_app(
         started_at=started_at,
         clock=clock,
         on_shutdown=on_shutdown,
+        presence=presence,
         job_sleep=job_sleep,
         job_clock=job_clock,
     )

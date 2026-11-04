@@ -22,7 +22,7 @@ from findata.runtime import Runtime
 from findata.schema import ensure_current
 from findata.sync import HISTORY_COMPLETE
 from findata.wire import SandboxLinkIn
-from tests.conftest import FakeGateway
+from tests.conftest import FakeGateway, FakePresence
 from tests.test_daemon_api import CRED, ROLES, FakeClock, _error
 from tests.test_wait_and_cli import Clock, page, slow_history_gateway
 
@@ -46,6 +46,7 @@ def _build(settings, keys, gateway, sleep=None, clock=None):
         AuditLog(runtime.session_factory, fake),
         started_at=fake(),
         clock=fake,
+        presence=FakePresence("confirmed"),
         job_sleep=sleep,
         job_clock=clock,
     )

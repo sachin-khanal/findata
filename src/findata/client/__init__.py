@@ -261,10 +261,13 @@ class DaemonClient:
         return JobOut.model_validate(self._json("GET", f"/v1/jobs/{_seg(job_id)}", timeout=timeout))
 
     # ---------- human controls ----------
+    # The daemon asks for Touch ID or the password before a grant or an approval and waits up
+    # to 60 s for it, so those two use the long timeout.
 
     def grant(self, operations: list[str], ttl_s: int, *, timeout: float | None = None) -> GrantOut:
         body = {"operations": list(operations), "ttl_s": ttl_s}
-        return GrantOut.model_validate(self._json("POST", "/v1/grants", json=body, timeout=timeout))
+        data = self._json("POST", "/v1/grants", json=body, timeout=self._long(timeout))
+        return GrantOut.model_validate(data)
 
     def revoke(self, *, timeout: float | None = None) -> None:
         self._request("DELETE", "/v1/grants", timeout=timeout)
@@ -277,7 +280,7 @@ class DaemonClient:
         return self._json("GET", "/v1/approvals", timeout=timeout)
 
     def approve(self, request_id: str, *, timeout: float | None = None) -> None:
-        self._request("POST", f"/v1/approvals/{_seg(request_id)}", timeout=timeout)
+        self._request("POST", f"/v1/approvals/{_seg(request_id)}", timeout=self._long(timeout))
 
     def audit(self, limit: int = 100, *, timeout: float | None = None) -> list[dict]:
         return self._json("GET", "/v1/audit", params={"limit": limit}, timeout=timeout)

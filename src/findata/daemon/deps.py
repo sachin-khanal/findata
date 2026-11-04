@@ -1,8 +1,9 @@
 """Shared FastAPI dependencies for the daemon's routes.
 
 The caller's role (from its credential header), permission checks against that role and the
-current write grant, the database session, the Plaid gateway, and the error type every route
-raises. Routes declare `require(permission)`; nothing else decides who may do what.
+current write grant, the user-presence check, the database session, the Plaid gateway, and the
+error type every route raises. Routes declare `require(permission)`; nothing else decides who
+may do what.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from findata.daemon.audit import SCOPE_KEY, AuditLog, RequestAudit
 from findata.daemon.auth import ROLE_PERMISSIONS, CredentialStore, Permission, Role
 from findata.daemon.grants import GRANTABLE, ApprovalStore, GrantStore
 from findata.daemon.jobs import JobManager
+from findata.daemon.presence import Presence, PresenceChecker
 from findata.plaid_gateway import PlaidGateway
 from findata.runtime import Runtime
 
@@ -54,6 +56,7 @@ class DaemonState:
     started_at: dt.datetime
     clock: Callable[[], dt.datetime]
     on_shutdown: Callable[[], None] | None
+    presence: PresenceChecker
     jobs: JobManager = field(default_factory=JobManager)
     job_sleep: Callable[[float], None] | None = None
     job_clock: Callable[[], float] | None = None
@@ -112,6 +115,42 @@ def _write_not_granted(permission: str) -> DaemonError:
         "user to run `findata grant mcp-write` in a terminal; an agent cannot grant itself "
         "access. Nothing was changed.",
     )
+
+
+_PRESENCE_REFUSALS: dict[Presence, str] = {
+    "denied": "Not confirmed at the Mac (Touch ID or password was cancelled or timed out). "
+    "Nothing was changed.",
+    "not_possible": "This needs confirmation at the Mac, and this session cannot show the "
+    "Touch ID or password prompt (for example over SSH). Run it from a logged-in session on "
+    "the Mac.",
+}
+
+
+def presence_gate(request: Request, role: RoleDep, state: StateDep) -> Callable[[str], None]:
+    """The user-presence check for an operation that carries human authority.
+
+    The route calls the returned function once its own checks have passed, before it changes
+    anything or takes `PLAID_WRITE_LOCK`. For `cli` and `web` it asks the user to confirm
+    `reason` at the Mac and raises USER_PRESENCE_REQUIRED unless they do (or the platform has
+    no check); the outcome goes into the request's audit entry. The agent (mcp) is never
+    asked: its only gated route is a removal whose approval was already confirmed in person.
+    """
+
+    def confirm(reason: str) -> None:
+        if role == "mcp":
+            return
+        outcome = state.presence.confirm(reason)
+        facts: RequestAudit | None = request.scope.get(SCOPE_KEY)
+        if facts is not None:
+            facts.presence = outcome
+        if outcome not in ("confirmed", "unsupported"):  # anything else is a refusal
+            detail = _PRESENCE_REFUSALS.get(outcome, _PRESENCE_REFUSALS["denied"])
+            raise DaemonError(403, "USER_PRESENCE_REQUIRED", detail)
+
+    return confirm
+
+
+PresenceDep = Annotated[Callable[[str], None], Depends(presence_gate)]
 
 
 def require(permission: Permission) -> Any:

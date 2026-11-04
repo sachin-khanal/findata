@@ -23,7 +23,7 @@ from findata.locations import Locations
 from findata.plaid_gateway import PlaidError
 from findata.runtime import Runtime
 from findata.schema import ensure_current, head_revision
-from tests.conftest import ACCESS_TOKEN, FakeGateway, account, txn
+from tests.conftest import ACCESS_TOKEN, FakeGateway, FakePresence, account, txn
 
 CRED = "X-Findata-Credential"
 ROLES = ("web", "cli", "mcp")
@@ -85,8 +85,9 @@ def gateway():
     return OverlapGateway(_pages())
 
 
-def _build(settings, keys, gateway, *, audit_cls=AuditLog):
+def _build(settings, keys, gateway, *, audit_cls=AuditLog, presence=None):
     clock = FakeClock()
+    presence = FakePresence("confirmed") if presence is None else presence
     # A file database (not :memory:/StaticPool) so concurrent requests get their own connection.
     engine = make_engine(settings.db_path, keys.db_key)
     ensure_current(engine)
@@ -105,6 +106,7 @@ def _build(settings, keys, gateway, *, audit_cls=AuditLog):
         audit,
         started_at=clock(),
         clock=clock,
+        presence=presence,
         on_shutdown=lambda: shutdowns.append(True),
     )
     tokens = {r: (locations.credentials_dir / f"{r}.token").read_text().strip() for r in ROLES}
@@ -118,6 +120,7 @@ def _build(settings, keys, gateway, *, audit_cls=AuditLog):
         gateway=gateway,
         shutdowns=shutdowns,
         locations=locations,
+        presence=presence,
     )
 
 
@@ -504,7 +507,7 @@ def test_every_request_is_audited_without_data(d):
     for r in rows:
         assert set(r) == {"id", "at", "role", "operation", "summary", "outcome"}
     by_op = {r["operation"]: r["summary"] for r in rows}
-    assert by_op["items.remove"] == "DELETE /v1/items/{item_id}"
+    assert by_op["items.remove"] == "DELETE /v1/items/{item_id} presence=confirmed"
     assert by_op["transactions.list"].startswith("GET /v1/transactions")
     assert "category" in by_op["transactions.list"] and "start" in by_op["transactions.list"]
 

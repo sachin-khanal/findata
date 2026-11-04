@@ -5,6 +5,9 @@ its first call creates a pending request and is refused with CONFIRMATION_REQUIR
 request's id; a human approves that id (`POST /v1/approvals/{id}`); the agent retries with
 `?request_id=` and the approval is used up. An agent can never remove `local_only`: that skips
 revoking the Item at Plaid, which is not what the human approved.
+
+A human (cli, web) removing an Item confirms it at the Mac first (`presence_gate`); the agent's
+removal does not, since the approval it uses up was confirmed there.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from fastapi import APIRouter, Response
 from findata.daemon.deps import (
     PLAID_WRITE_LOCK,
     DaemonError,
+    PresenceDep,
     RoleDep,
     SessionDep,
     StateDep,
@@ -27,6 +31,12 @@ from findata.linking import remove_item
 REMOVE = "items.remove"
 
 router = APIRouter(prefix="/v1")
+
+
+def describe_item(item: Item | None) -> str:
+    """How a presence prompt names an Item: its bank, never its id or any of its data."""
+    name = item.institution_name if item is not None else None
+    return name or "a linked bank"
 
 
 def _pending_request(approvals: ApprovalStore, item_id: str) -> str:
@@ -43,6 +53,7 @@ def remove(
     role: RoleDep,
     session: SessionDep,
     state: StateDep,
+    confirm_presence: PresenceDep,
     local_only: bool = False,
     request_id: str | None = None,
 ) -> Response:
@@ -67,6 +78,7 @@ def remove(
             request_id=rid,
         )
     gateway = None if local_only else get_gateway(state)
+    confirm_presence(f"remove {describe_item(item)} and its local data")
     with PLAID_WRITE_LOCK:
         remove_item(session, gateway, state.runtime.cipher, item, local_only=local_only)
     return Response(status_code=204)

@@ -10,6 +10,10 @@ from pydantic import BaseModel, Field
 
 MAX_GRANT_TTL_S = 86_400  # a write grant lasts at most a day
 
+# How the daemon confirms a human-authority operation: Touch ID or the password on macOS, or
+# no check on platforms that have none yet.
+PresenceKind = Literal["touch_id", "unsupported"]
+
 
 class ItemOut(BaseModel):
     id: str
@@ -65,6 +69,7 @@ class StatusOut(BaseModel):
     schema_revision: str | None
     started_at: dt.datetime
     uptime_s: float
+    user_presence: PresenceKind
 
 
 class GrantIn(BaseModel):

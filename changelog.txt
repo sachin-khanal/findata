@@ -33,6 +33,7 @@ d22e2ae  2026-10-21  [feature/daemon-architecture] Plan Task 6: typed DaemonClie
 31c55c2  2026-10-21  [feature/daemon-architecture] Task 6 review fixes: long timeouts for Plaid-backed calls plus DaemonTimeout, a lock probe before the Windows TCP fallback sends a credential, and quoted URL path segments.
 310ff4a  2026-10-21  [feature/daemon-architecture] Plan Task 7: sandbox-link runs as a daemon job (POST /v1/jobs/sandbox-link, GET /v1/jobs/{id}) emitting the same events as the CLI does today.
 b8e7790  2026-10-21  [feature/daemon-architecture] Task 7 review fixes: 503 before a job is created when Plaid keys are missing, starting a job needs both link and sync, the write lock is held per sync pass rather than across sleeps, one running job at a time (409 otherwise), and a BaseException fails the job and frees the slot.
+ad8aa2f  2026-11-04  [feature/daemon-architecture] Spec and plan: user presence (Touch ID or password on macOS, checked by the daemon) before grants, approvals and cli/web item removals, as the user decided, with residual limits documented; new Task 7b before Task 8; ticks Tasks 1–7, backfills this changelog and carries the hook fix from main.
 
-Uncommitted changes: changelog.txt (entries for f1fe53d, de9510d and e79e2db..b8e7790); docs/superpowers/plans/2026-10-21-daemon-architecture.md (Tasks 1–7 ticked); .claude/settings.json and .claude/hooks/changelog-reminder.sh (same changelog-hook fix as on main).
-Branch notes: feature/daemon-architecture holds plan Tasks 1–7, not merged or pushed; Task 7's review fixes (b8e7790) have not been re-reviewed yet; Tasks 8–13 not started. main has the design (f1fe53d) and plan (de9510d).
+Uncommitted changes: changelog.txt (entry for ad8aa2f).
+Branch notes: feature/daemon-architecture holds plan Tasks 1–7 (all reviewed clean), not merged or pushed; Task 7b (user presence) is next, then Tasks 8–13. main has the design (f1fe53d), plan (de9510d) and changelog-hook fixes (99569b7, ef15804).

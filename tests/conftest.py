@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from findata.config import Settings
+from findata.daemon.presence import MacPresence, Presence, PresenceKind
 from findata.db import make_engine, make_session_factory
 from findata.plaid_gateway import PlaidError
 from findata.schema import ensure_current
@@ -87,6 +88,35 @@ class FakeGateway:
         if isinstance(page, Exception):
             raise page
         return page
+
+
+class FakePresence:
+    """A PresenceChecker that answers `outcome` and records every reason it is asked about."""
+
+    def __init__(self, outcome: Presence = "confirmed", kind: PresenceKind = "touch_id") -> None:
+        self.outcome = outcome
+        self.kind = kind
+        self.reasons: list[str] = []
+
+    def confirm(self, reason: str) -> Presence:
+        self.reasons.append(reason)
+        return self.outcome
+
+
+@pytest.fixture(autouse=True)
+def _never_show_a_real_presence_prompt(monkeypatch):
+    """No test may bring up Touch ID or the password prompt on this Mac: a `MacPresence`
+    without a fake context factory fails the test instead of asking."""
+    real_confirm = MacPresence.confirm
+
+    def guarded(self: MacPresence, reason: str) -> Presence:
+        if self._context_factory is None:
+            pytest.fail(
+                "A test called the real MacPresence.confirm; give the daemon a FakePresence."
+            )
+        return real_confirm(self, reason)
+
+    monkeypatch.setattr(MacPresence, "confirm", guarded)
 
 
 @pytest.fixture

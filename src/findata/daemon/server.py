@@ -30,6 +30,7 @@ from findata.daemon.audit import AuditLog
 from findata.daemon.auth import CredentialStore
 from findata.daemon.grants import ApprovalStore, GrantStore
 from findata.daemon.lock import DaemonLock
+from findata.daemon.presence import PresenceChecker, default_presence
 from findata.daemon.scheduler import Scheduler
 from findata.locations import Locations
 from findata.privfs import create_private_file, ensure_private_dir
@@ -160,8 +161,11 @@ def _uvicorn_config(app) -> uvicorn.Config:
     )
 
 
-def run_daemon(settings: Settings) -> None:
+def run_daemon(settings: Settings, *, presence: PresenceChecker | None = None) -> None:
     """Run the daemon in the foreground until shutdown (`POST /v1/shutdown`, Ctrl+C, SIGTERM).
+
+    `presence` confirms human-authority operations; None (always, outside tests) means this
+    platform's real check.
 
     Raises before serving, with a message for the user: `DaemonAlreadyRunning`,
     `SchemaOutOfDateError`, `DaemonStartError`, or another RuntimeError/OSError (no master
@@ -173,14 +177,17 @@ def run_daemon(settings: Settings) -> None:
         check_socket_path(locations.socket)  # before anything is created
     with DaemonLock(locations.lock, locations.pid):
         try:
-            _serve(settings, locations, use_tcp)
+            checker = default_presence() if presence is None else presence
+            _serve(settings, locations, use_tcp, checker)
         finally:
             locations.socket.unlink(missing_ok=True)
             locations.port_file.unlink(missing_ok=True)
     logger.info("findata daemon stopped.")
 
 
-def _serve(settings: Settings, locations: Locations, use_tcp: bool) -> None:
+def _serve(
+    settings: Settings, locations: Locations, use_tcp: bool, presence: PresenceChecker
+) -> None:
     runtime = build_runtime(settings)  # keys, database, schema check
     credentials = CredentialStore(locations)
     credentials.ensure_all()
@@ -196,6 +203,7 @@ def _serve(settings: Settings, locations: Locations, use_tcp: bool) -> None:
         AuditLog(runtime.session_factory, _utcnow),
         started_at=_utcnow(),
         clock=_utcnow,
+        presence=presence,
         on_shutdown=request_exit,
     )
     server = uvicorn.Server(_uvicorn_config(app))
