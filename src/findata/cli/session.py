@@ -11,7 +11,7 @@ from contextlib import contextmanager
 
 import typer
 
-from findata.cli.output import fail
+from findata.cli.output import fail, plaid_rejected
 from findata.client import (
     DaemonClient,
     DaemonClientError,
@@ -53,11 +53,7 @@ def daemon_errors(
         fail(as_json, str(exc), error_code="DAEMON_TIMEOUT")
     except DaemonRejected as exc:
         if exc.status == PLAID_REJECTED:
-            fail(
-                as_json,
-                f"Plaid rejected {what} ({exc.error_code}): {exc.detail}{plaid_suffix}",
-                error_code=exc.error_code,
-            )
+            plaid_rejected(as_json, exc.error_code, exc.detail, what, plaid_suffix)
         fail(as_json, exc.detail, error_code=exc.error_code, **exc.extra)
     except DaemonClientError as exc:  # e.g. no credential file yet
         fail(as_json, str(exc), error_code="NOT_CONFIGURED")

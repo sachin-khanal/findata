@@ -24,10 +24,12 @@ def fail(as_json: bool, message: str, code: int = 1, **event) -> NoReturn:
     raise typer.Exit(code)
 
 
-def plaid_rejected(as_json: bool, exc, what: str = "the request", suffix: str = "") -> NoReturn:
-    """Standard failure for a PlaidError."""
+def plaid_rejected(
+    as_json: bool, error_code: str, detail: str, what: str = "the request", suffix: str = ""
+) -> NoReturn:
+    """Standard failure for an error Plaid returned (its code and message, as the daemon relays)."""
     fail(
         as_json,
-        f"Plaid rejected {what} ({exc.error_code}): {exc}{suffix}",
-        error_code=exc.error_code,
+        f"Plaid rejected {what} ({error_code}): {detail}{suffix}",
+        error_code=error_code,
     )
