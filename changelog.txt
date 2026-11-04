@@ -41,6 +41,7 @@ dd9ec8a  2026-11-04  [feature/daemon-architecture] Plan Task 7c: fixes the inter
 0093b62  2026-11-04  [feature/daemon-architecture] Plan: tick Task 7c as done (dd9ec8a, review approved; QueuePool fix, no serializing lock needed, ruling R26).
 add2950  2026-11-04  [feature/daemon-architecture] Plan Task 7d: the daemon pushes events and job progress as NDJSON streams instead of being polled (GET /v1/events with seq/after resume and gap, GET /v1/jobs/{id}/events, keep-alives, at most 32 streams, ended at shutdown); grant and approval expiry come from timers; adds a per-Item history job (POST /v1/jobs/history) and the client's follow_job()/events() iterators.
 11fb9cb  2026-11-04  [feature/daemon-architecture] Task 7d review fixes: sandbox-link and history jobs share one running-job slot again (a 409 names whichever runs), and the agent (mcp) may hold at most 8 of the 32 event streams so it cannot lock humans out (ruling R27).
+bb16e1b  2026-11-04  [feature/daemon-architecture] Plan: tick Task 7d as done (event streams add2950 with review fixes 11fb9cb: one running job across job kinds, mcp limited to 8 of the 32 streams).
 
-Uncommitted changes: changelog.txt (entry for 11fb9cb).
-Branch notes: feature/daemon-architecture holds plan Tasks 1–7, 7b (user presence) and 7c (database pool fix), all reviewed clean, and Task 7d (event streams, add2950 and review fixes 11fb9cb, in review), not merged or pushed; next Tasks 8–13. main has the design (f1fe53d), plan (de9510d) and changelog-hook fixes (99569b7, ef15804).
+Uncommitted changes: changelog.txt (entry for bb16e1b).
+Branch notes: feature/daemon-architecture holds plan Tasks 1–7, 7b (user presence), 7c (database pool fix) and 7d (event streams), all reviewed clean, not merged or pushed; next Task 8 (CLI through the daemon), then Tasks 9–13. main has the design (f1fe53d), plan (de9510d) and changelog-hook fixes (99569b7, ef15804).

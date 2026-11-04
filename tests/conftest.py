@@ -151,3 +151,29 @@ def session(engine):
 @pytest.fixture
 def cipher(keys):
     return keys.cipher
+
+
+@pytest.fixture
+def cli_against(monkeypatch, settings):
+    """Run the CLI against an in-process daemon app: `attach(app)` returns `invoke(*args)`.
+
+    The CLI's `connect` is replaced by one that builds a `cli`-role client over the app, so the
+    commands run unchanged and nothing needs a socket or a running daemon.
+    """
+    from fastapi.testclient import TestClient
+    from typer.testing import CliRunner
+
+    from findata import cli
+    from findata.client import DaemonClient
+
+    def attach(app):
+        monkeypatch.setattr(
+            "findata.cli.session.connect",
+            lambda as_json: DaemonClient(
+                settings.data_dir, "cli", http_client=TestClient(app, base_url="http://daemon")
+            ),
+        )
+        runner = CliRunner()
+        return lambda *args, **kw: runner.invoke(cli.app, list(args), **kw)
+
+    return attach

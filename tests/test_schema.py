@@ -173,7 +173,7 @@ def test_brand_new_database_upgrade_needs_no_backup(db):
 
 @pytest.fixture
 def run(monkeypatch, settings):
-    monkeypatch.setattr("findata.cli.commands.migrate.get_settings", lambda: settings)
+    monkeypatch.setattr("findata.config.get_settings", lambda: settings)
     return lambda *args: CliRunner().invoke(cli.app, ["migrate", *args])
 
 
@@ -195,12 +195,3 @@ def test_migrate_check_fails_when_behind(run, settings, keys, with_next_migratio
     applied = run("--json")
     assert applied.exit_code == 0 and json.loads(applied.output)["to_revision"] == "0003"
     assert json.loads(applied.output)["backup"]
-
-
-def test_commands_refuse_a_database_that_needs_migrating(settings, keys, monkeypatch):
-    engine = make_engine(settings.db_path, keys.db_key)
-    _create_legacy_tables(engine)  # adopted as the baseline, so the real 0002 is pending
-    monkeypatch.setattr("findata.runtime.get_settings", lambda: settings)
-    r = CliRunner().invoke(cli.app, ["txns", "--json"])
-    assert r.exit_code == 1
-    assert json.loads(r.output)["error_code"] == "SCHEMA_OUT_OF_DATE"

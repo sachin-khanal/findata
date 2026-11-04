@@ -5,10 +5,6 @@ from __future__ import annotations
 import typer
 
 from findata.cli.output import JsonOpt, emit, fail
-from findata.config import get_settings
-from findata.db import make_engine
-from findata.schema import current_revision, head_revision, upgrade
-from findata.security import load_keys
 
 
 def migrate(
@@ -25,6 +21,11 @@ def migrate(
     A brand-new database is simply created. An existing one is copied to
     `findata.db.bak-<timestamp>` (owner-only) before anything changes.
     """
+    from findata.config import get_settings
+    from findata.db import make_engine
+    from findata.schema import current_revision, head_revision, upgrade
+    from findata.security import load_keys
+
     s = get_settings()
     try:
         engine = make_engine(s.db_path, load_keys(s).db_key)

@@ -393,8 +393,7 @@ def test_sigterm_stops_the_daemon_cleanly(data_dir, spawned):
 def test_start_command_module_imports_no_core_modules_at_module_level():
     """Ruling R7: the command module loads core code only when `start` actually runs.
 
-    (Importing it through `findata.cli` still loads core via the other command modules
-    until they are made lazy too, so this checks the module's own top-level imports.)
+    (`test_importing_the_cli_loads_no_core_modules` checks the whole package.)
     """
     path = Path(cli.__file__).parent / "commands" / "daemon.py"
     tree = ast.parse(path.read_text())
@@ -404,7 +403,7 @@ def test_start_command_module_imports_no_core_modules_at_module_level():
             top_level += [alias.name for alias in node.names]
         elif isinstance(node, ast.ImportFrom):
             top_level.append(node.module or "")
-    allowed = {"__future__", "typer", "findata.cli.output"}
+    allowed = {"__future__", "typer", "findata.cli", "findata.cli.output"}
     assert set(top_level) <= allowed, top_level
 
 

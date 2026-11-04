@@ -29,6 +29,22 @@ JOB_FINISHED_EVENT = "job_finished"
 # no check on platforms that have none yet.
 PresenceKind = Literal["touch_id", "unsupported"]
 
+# Plaid's transactions_update_status once all history is loaded, and what each status means in
+# plain language (the daemon's messages and the CLI's progress lines use the same words).
+HISTORY_COMPLETE = "HISTORICAL_UPDATE_COMPLETE"
+
+_STATUS_TEXT = {
+    None: "Plaid has not reported a status yet.",
+    "NOT_READY": "Plaid is still preparing this account's transactions.",
+    "INITIAL_UPDATE_COMPLETE": "Recent transactions are loaded; older history is still loading.",
+    HISTORY_COMPLETE: "All available history is loaded.",
+}
+
+
+def describe_status(status: str | None) -> str:
+    """Plain-language meaning of Plaid's transactions_update_status."""
+    return _STATUS_TEXT.get(status, f"Plaid reported status {status}.")
+
 
 class ItemOut(BaseModel):
     id: str

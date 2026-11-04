@@ -326,7 +326,7 @@ class DaemonClient:
             json=body.model_dump(mode="json"),
             timeout=self._long(timeout),
         )
-        return data.get("job_id") or data["id"]
+        return data["job_id"]
 
     def job(self, job_id: str, *, timeout: float | None = None) -> JobOut:
         return JobOut.model_validate(self._json("GET", f"/v1/jobs/{_seg(job_id)}", timeout=timeout))
