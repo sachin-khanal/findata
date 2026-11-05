@@ -76,7 +76,9 @@ def test_write_tool_succeeds_after_grant_and_fails_after_expiry_and_revoke(d):
     d.grants.grant({"sync"}, 600)
     assert not call(c, "sync").is_error
     d.grants.revoke()
-    assert call(c, "sync").is_error
+    revoked = call(c, "sync")
+    assert revoked.is_error and "WRITE_NOT_GRANTED" in text(revoked)
+    assert "findata grant mcp-write" in text(revoked)
 
 
 def test_sync_grant_does_not_allow_remove_item(d):
@@ -84,6 +86,7 @@ def test_sync_grant_does_not_allow_remove_item(d):
     d.grants.grant({"sync"}, 600)
     r = call(mcp_client(d), "remove_item", item_id="item_1")
     assert r.is_error and "WRITE_NOT_GRANTED" in text(r)
+    assert "findata grant mcp-write --ops items.remove" in text(r)
     assert [i.id for i in mcp_client(d).items()] == ["item_1"]
 
 
@@ -105,20 +108,52 @@ def test_remove_item_returns_request_id_then_needs_human_approval(d):
     assert c.items() == []
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [DaemonNotRunning("x"), DaemonTimeout("y")],
-)
-def test_tools_report_daemon_not_running_clearly(d, failure):
+CALLS = [("get_status", {}), ("list_transactions", {}), ("sync", {})]
+
+
+def test_tools_report_daemon_not_running_clearly(d):
     class Down(DaemonClient):
         def _connect(self):
-            raise failure
+            raise DaemonNotRunning("x")
 
-    down = Down(d.locations.data_dir, "mcp")
-    for name, args in [("get_status", {}), ("list_transactions", {}), ("sync", {})]:
-        r = call(down, name, **args)
+    for name, args in CALLS:
+        r = call(Down(d.locations.data_dir, "mcp"), name, **args)
         assert r.is_error, name
         assert "daemon is not running" in text(r) and "findata start" in text(r)
+
+
+def test_real_missing_socket_reports_not_running(settings, keys):
+    from findata.daemon.auth import CredentialStore
+    from findata.locations import Locations
+
+    CredentialStore(Locations(settings.data_dir)).ensure_all()  # credentials, but no daemon
+    r = call(DaemonClient(settings.data_dir, "mcp"), "get_status")
+    assert r.is_error and "findata start" in text(r)
+
+
+def test_timeout_is_not_reported_as_not_running(d):
+    class Slow(DaemonClient):
+        def _connect(self):
+            raise DaemonTimeout("y")
+
+    for name, args in CALLS:
+        r = call(Slow(d.locations.data_dir, "mcp"), name, **args)
+        assert r.is_error, name
+        assert "did not answer in time" in text(r) and "findata status" in text(r)
+        assert "not running" not in text(r) and "findata start" not in text(r)
+
+
+def test_missing_credential_names_the_problem_and_fix(tmp_path):
+    r = call(DaemonClient(tmp_path, "mcp"), "get_status")
+    assert r.is_error
+    assert "No credential file" in text(r) and "findata init" in text(r)
+
+
+def test_server_keeps_request_logging_quiet():
+    import logging
+
+    build_mcp_server(DaemonClient("/nonexistent", "mcp"))
+    assert logging.getLogger("httpx2").getEffectiveLevel() >= logging.WARNING
 
 
 def test_mcp_module_never_imports_core_modules():

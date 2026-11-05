@@ -1,6 +1,6 @@
-"""`serve web`: run the local web front end, a client of the daemon (role `web`).
+"""`serve web` and `serve mcp`: front ends that are clients of the daemon (roles `web`, `mcp`).
 
-Core modules are never imported here: the web server reaches data only through the daemon.
+Core modules are never imported here: front ends reach data only through the daemon.
 """
 
 from __future__ import annotations

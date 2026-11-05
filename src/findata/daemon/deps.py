@@ -115,8 +115,8 @@ def _write_not_granted(permission: str) -> DaemonError:
         403,
         "WRITE_NOT_GRANTED",
         f"The agent (mcp) role may not use {permission!r} until a human allows it. Ask the "
-        "user to run `findata grant mcp-write` in a terminal; an agent cannot grant itself "
-        "access. Nothing was changed.",
+        f"user to run `findata grant mcp-write --ops {permission}` in a terminal; an agent "
+        "cannot grant itself access. Nothing was changed.",
     )
 
 

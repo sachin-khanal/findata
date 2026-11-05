@@ -21,7 +21,8 @@ from findata.client.errors import DaemonClientError, DaemonNotRunning, DaemonRej
 
 NOT_RUNNING = "The findata daemon is not running. Ask the user to run `findata start`."
 TIMED_OUT = (
-    NOT_RUNNING + " It did not answer in time, so a write may still be running; do not retry."
+    "The findata daemon did not answer in time; it may still be working, and a write may "
+    "already have taken effect. Do not retry; ask the user to check `findata status`."
 )
 
 _READ = ToolAnnotations(read_only_hint=True)
@@ -63,7 +64,7 @@ async def _run(fn, *args, **kwargs) -> Any:
 
 
 def build_mcp_server(client: DaemonClient) -> MCPServer:
-    mcp = MCPServer("findata")
+    mcp = MCPServer("findata", log_level="WARNING")  # httpx2 INFO logs carry query params
 
     @mcp.tool(annotations=_READ)
     async def get_status() -> dict[str, Any]:
@@ -105,7 +106,7 @@ def build_mcp_server(client: DaemonClient) -> MCPServer:
         """Pull new transactions from Plaid for every Item.
 
         Needs a human grant covering the `sync` operation: if refused, ask the user to run
-        `findata grant mcp-write` (grants expire on their own).
+        `findata grant mcp-write --ops sync` (grants expire on their own).
         """
         return await _run(client.sync)
 
