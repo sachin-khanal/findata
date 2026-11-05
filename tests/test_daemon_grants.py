@@ -1,3 +1,4 @@
+import secrets
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -123,3 +124,17 @@ def test_pending_lists_unapproved_unexpired_only():
     assert set(pending[0]) == {"request_id", "operation", "subject", "institution", "created_at"}
     clock.advance(300)
     assert approvals.pending() == []
+
+
+def test_request_ids_never_start_with_a_dash(monkeypatch):
+    # `findata approve <id>` reads a dash-first id as an option, so no id may start with "-".
+    # Force the random source to return such a token first (1 in 64 real ids did).
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes: "-" + "x" * 10)
+    store = ApprovalStore(FakeClock())
+    assert not store.request("items.remove", "item_1").startswith("-")
+    # then mint thousands of ids from the real random source
+    monkeypatch.undo()
+    store = ApprovalStore(FakeClock())
+    ids = [store.request("items.remove", "item_1") for _ in range(3000)]
+    assert len(set(ids)) == len(ids)
+    assert not [rid for rid in ids if rid.startswith("-")]

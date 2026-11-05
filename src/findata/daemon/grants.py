@@ -136,7 +136,8 @@ class ApprovalStore:
 
     def request(self, operation: str, subject: str, *, institution: str | None = None) -> str:
         """A pending request for a human to approve; `institution` only names it in events."""
-        rid = secrets.token_urlsafe(8)
+        # 64 random bits as 16 hex characters: never starts with "-", so `findata approve` takes it
+        rid = secrets.token_hex(8)
         with self._lock:
             self._purge()
             req = {

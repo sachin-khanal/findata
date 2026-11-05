@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import subprocess
 import sys
 
@@ -171,6 +172,15 @@ def test_approve_unblocks_an_agent_removal(invoke, d):
     again = invoke("approve", rid, "--json")
     assert again.exit_code == 1 and _last(again)["error_code"] == "NOT_FOUND"
     assert "expired" in _last(again)["message"] and "approved already" in _last(again)["message"]
+
+
+def test_cli_approve_accepts_every_request_id_shape(invoke, d, monkeypatch):
+    _link_and_sync(d)
+    # the random source returns a dash-first token; `approve` must still take the id it was given
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes: "-" + "x" * 10)
+    rid = _agent_request(d)
+    r = invoke("approve", rid, "--json")
+    assert r.exit_code == 0 and _last(r) == {"event": "approved", "request_id": rid}
 
 
 @pytest.mark.parametrize("command", ["grant", "approve", "items rm"])
