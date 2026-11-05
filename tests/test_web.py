@@ -17,6 +17,7 @@ from findata.client.errors import DaemonNotRunning, DaemonRejected
 from findata.privfs import load_or_create_api_token
 from findata.web.app import create_web_app
 from findata.web.deps import TOKEN_HEADER
+from findata.wire import SyncOut
 from tests.conftest import FakeGateway, account, txn
 from tests.test_daemon_events import _build, _eventually, _names, _published, serve
 from tests.test_wait_and_cli import Clock
@@ -236,6 +237,42 @@ def test_link_exchange_starts_a_history_job(client, auth, d):
     assert [(e["kind"], e["item_id"]) for e in started] == [("history", "item_1")]
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        DaemonRejected("UNAVAILABLE", "try later", 503),
+        DaemonNotRunning("The findata daemon is not running. Start it with `findata start`."),
+    ],
+)
+def test_history_start_failures_do_not_fail_exchange_or_sync(
+    client, auth, d, monkeypatch, failure, caplog
+):
+    def broken(self, item_id, **kw):
+        raise failure
+
+    monkeypatch.setattr(DaemonClient, "start_history", broken)
+    r = client.post("/api/link/exchange", headers=auth, json={"public_token": "public-sandbox-ok"})
+    assert r.status_code == 200 and r.json()["id"] == "item_1"
+    monkeypatch.setattr(
+        DaemonClient,
+        "sync",
+        lambda self, **kw: [
+            SyncOut(
+                item_id="item_1",
+                added=1,
+                modified=0,
+                removed=0,
+                status=None,
+                history_complete=False,
+                detail="loading",
+            )
+        ],
+    )
+    r = client.post("/api/sync", headers=auth)
+    assert r.status_code == 200 and r.json()[0]["added"] == 1
+    assert "Could not start a history job" in caplog.text
+
+
 def test_exchange_succeeds_when_a_job_is_already_running(client, auth, d, monkeypatch):
     def busy(self, item_id, **kw):
         raise DaemonRejected("JOB_ALREADY_RUNNING", "A job is already running.", 409)
@@ -282,6 +319,13 @@ def test_web_events_relays_daemon_events_and_needs_the_token(client, auth, d):
     assert r.status_code == 200 and r.headers["content-type"].startswith("application/x-ndjson")
     lines = [json.loads(line) for line in r.text.splitlines() if line]
     assert [(e["seq"], e["event"]) for e in lines] == [(1, "item_removed"), (2, "item_linked")]
+
+
+def test_served_page_is_one_page(client):
+    html = client.get("/").text
+    assert html.count("<script>") == 1 and html.count("<script") == 2  # inline + Plaid's
+    assert html.count('id="status"') == 1 and html.count("const TOKEN") == 1
+    assert html.count("</html>") == 1 and html.rstrip().endswith("</html>")
 
 
 def test_page_has_no_retry_loop():

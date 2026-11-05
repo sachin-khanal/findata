@@ -4,28 +4,33 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from collections.abc import AsyncIterator
 from importlib.resources import files
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
-from findata.client import DaemonClientError, DaemonRejected
+from findata.client import DaemonClient, DaemonClientError, DaemonRejected
 from findata.web.deps import ClientDep, auth
 from findata.wire import AccountOut, ExchangeIn, ItemOut, SyncOut, TransactionOut
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 data = APIRouter(prefix="/api", dependencies=auth)
 
 
-def _start_history(client: ClientDep, item_id: str) -> None:
-    """Have the daemon wait for the Item's history. A job already running is fine: its events
-    reach the page anyway."""
+def _start_history(client: DaemonClient, item_id: str) -> None:
+    """Have the daemon wait for the Item's history. Never fails the request: the exchange or
+    sync it follows has already been applied, and a job already running (409) reaches the page
+    through its events anyway. Any other failure is logged and the page's next Sync retries."""
     try:
         client.start_history(item_id)
     except DaemonRejected as exc:
         if exc.error_code != "JOB_ALREADY_RUNNING":
-            raise
+            log.warning("Could not start a history job (%s, HTTP %s).", exc.error_code, exc.status)
+    except DaemonClientError as exc:
+        log.warning("Could not start a history job: %s", type(exc).__name__)
 
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)

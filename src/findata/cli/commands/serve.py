@@ -26,4 +26,9 @@ def web() -> None:
     typer.echo(
         f"findata web → http://{s.findata_host}:{s.findata_port} (the daemon must be running)"
     )
-    uvicorn.run(create_web_app(client, token), host=s.findata_host, port=s.findata_port)
+    uvicorn.run(
+        create_web_app(client, token),
+        host=s.findata_host,
+        port=s.findata_port,
+        timeout_graceful_shutdown=5,  # an open page's event stream must not hold Ctrl+C
+    )
