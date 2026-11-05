@@ -338,11 +338,13 @@ Added 2026-11-04 from the user's decision; spec section "Events, not polling". P
 - User presence (Task 7b): Grant and Approve bring up the Touch ID prompt on the Mac (the daemon asks, not the page). The UI shows "Confirm on your Mac…" while the request is pending and shows a `USER_PRESENCE_REQUIRED` refusal as a plain message.
 - Events (Task 7d): the section updates live from `grant_*` and `approval_*` events; it never re-fetches on a timer.
 
-- [ ] **Step 1: Write failing tests:** `test_web_grant_round_trip`, `test_web_lists_and_approves_pending_removals`, `test_web_grant_requires_the_browser_token`, `test_web_reports_a_presence_refusal`, `test_panel_updates_from_events` (an `approval_requested` event shows the request without a reload).
-- [ ] **Step 2: Run** `uv run pytest tests/test_web.py -v`; expected FAIL.
-- [ ] **Step 3: Implement** the routes and the UI section, matching the existing page's plain style.
-- [ ] **Step 4: Run** `uv run pytest -q`, then check the panel in the browser; expected PASS.
-- [ ] **Step 5: Commit** `git commit -m "Add agent-access panel to the web UI"`
+- [x] **Step 1: Write failing tests:** `test_web_grant_round_trip`, `test_web_lists_and_approves_pending_removals`, `test_web_grant_requires_the_browser_token`, `test_web_reports_a_presence_refusal`, `test_panel_updates_from_events` (an `approval_requested` event shows the request without a reload).
+- [x] **Step 2: Run** `uv run pytest tests/test_web.py -v`; expected FAIL.
+- [x] **Step 3: Implement** the routes and the UI section, matching the existing page's plain style.
+- [x] **Step 4: Run** `uv run pytest -q`, then check the panel in the browser; expected PASS.
+- [x] **Step 5: Commit** `git commit -m "Add agent-access panel to the web UI"`
+
+**Done:** 4bcbf7d, review fixes 85382d8 (Revoke and Approve report success; where the daemon has no presence check, grants and approvals from the web are refused and must be made in a terminal, ruling R42; pending requests carry the bank's name). Checked in a browser without Touch ID; Grant and Approve with Touch ID are checked with the user at the end (ruling R47).
 
 ### Task 11b: Browser sessions from a launch link
 
