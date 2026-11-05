@@ -17,9 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from findata.privfs import create_private_file
+from findata.readiness import DEFAULT_WAIT_S, READY_LINE
 
-READY_LINE = b"ready\n"
-DEFAULT_WAIT_S = 30.0
 LOG_TAIL_LINES = 20
 STOP_GRACE_S = 10.0
 
@@ -73,12 +72,20 @@ def _wait_for_ready(read_fd: int, timeout: float) -> bool:
 
 
 def _terminate(proc: subprocess.Popen) -> None:
-    proc.terminate()
+    """Stop the child and reap it. Ctrl+C while this runs speeds it up (kill) but cannot
+    abandon it."""
     try:
+        proc.terminate()
         proc.wait(timeout=STOP_GRACE_S)
-    except subprocess.TimeoutExpired:
+        return
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
         proc.kill()
-        proc.wait()
+    while True:
+        try:
+            proc.wait()
+            return
+        except KeyboardInterrupt:
+            continue
 
 
 def start_in_background(log: Path, timeout: float = DEFAULT_WAIT_S) -> Started:
@@ -135,5 +142,11 @@ def start_in_background(log: Path, timeout: float = DEFAULT_WAIT_S) -> Started:
 
 def _failure(why: str, proc: subprocess.Popen, log: Path, offset: int) -> str:
     tail = _log_tail(log, offset)
+    for line in reversed(tail.splitlines()):
+        if line.startswith("Error: "):  # the child's own explanation, e.g. already running
+            return (
+                f"{line[len('Error: ') :]}\n"
+                f"Last log lines ({log}; the process that was started had pid {proc.pid}):\n{tail}"
+            )
     detail = f"\nLast log lines ({log}):\n{tail}" if tail else f"\nLog: {log}"
     return f"{why} (pid {proc.pid}){detail}"

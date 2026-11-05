@@ -6,6 +6,7 @@ bytes). Only start, status and stop are used, so no Plaid call and no Touch ID p
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import signal
@@ -46,6 +47,8 @@ def data_dir():
             except ProcessLookupError:
                 break
             time.sleep(0.5)
+    with contextlib.suppress(OSError, ValueError):  # a fake child must not outlive its test
+        os.kill(int((path / "fake.pid").read_text()), signal.SIGKILL)
     shutil.rmtree(path, ignore_errors=True)
 
 
@@ -124,7 +127,7 @@ def test_background_start_fails_loudly_if_the_child_dies(data_dir):
     assert "findata migrate" in failed.stderr
     assert "Traceback" not in failed.stderr
     assert "started in the background" not in failed.stdout
-    assert not _alive(_pid_from(failed.stderr))  # no stray process
+    assert not _alive(int(failed.stderr.split("had pid ")[1].split(")")[0]))  # no stray process
     loc = Locations(data_dir)
     assert not loc.socket.exists() and not loc.pid.exists()
 
@@ -136,6 +139,7 @@ def test_background_daemon_logs_to_file_and_not_the_terminal(data_dir):
         assert "listening" not in started.stdout + started.stderr
         log = Locations(data_dir).log.read_text()
         assert "findata daemon" in log and "listening on" in log
+        assert "findata stop" in log and "Ctrl+C" not in log
     finally:
         _findata(data_dir, "stop")
 
@@ -225,14 +229,11 @@ def test_background_start_waits_on_the_ready_signal(data_dir, monkeypatch):
     began = time.monotonic()
     result = CliRunner().invoke(cli.app, ["start", "--background", "--wait-timeout", "20"])
     elapsed = time.monotonic() - began
+    assert result.exit_code == 0, result.output
+    assert elapsed >= 1.5
+    assert (data_dir / "fake.connections").read_text() == "0"
     pid = int((data_dir / "fake.pid").read_text())
-    try:
-        assert result.exit_code == 0, result.output
-        assert elapsed >= 1.5
-        assert (data_dir / "fake.connections").read_text() == "0"
-        assert f"pid {pid}" in result.output
-    finally:
-        os.kill(pid, signal.SIGKILL)
+    assert f"pid {pid}" in result.output
 
 
 def test_background_start_times_out_and_leaves_no_process(data_dir, monkeypatch):
@@ -241,3 +242,82 @@ def test_background_start_times_out_and_leaves_no_process(data_dir, monkeypatch)
     assert result.exit_code == 1
     assert "not ready" in result.output
     assert not _alive(int((data_dir / "fake.pid").read_text()))
+
+
+def test_a_daemon_whose_parent_went_away_keeps_serving(data_dir):
+    """The ready write hits a closed pipe (terminal closed mid-start): not fatal."""
+    read_fd, write_fd = os.pipe()
+    os.close(read_fd)
+    proc = subprocess.Popen(  # noqa: S603 (our own interpreter and module)
+        [sys.executable, "-m", "findata.cli", "start", "--ready-fd", str(write_fd)],
+        cwd=data_dir,
+        env=_env(data_dir),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        pass_fds=(write_fd,),
+    )
+    os.close(write_fd)
+    try:
+        deadline = time.monotonic() + 60
+        while True:
+            assert proc.poll() is None, "the daemon exited instead of serving"
+            try:
+                DaemonClient(data_dir, "cli", timeout=5).status()
+                break
+            except Exception:
+                assert time.monotonic() < deadline
+                time.sleep(0.1)
+        time.sleep(0.5)
+        assert proc.poll() is None
+        assert _findata(data_dir, "stop").returncode == 0
+        assert proc.wait(timeout=30) == 0
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_background_start_while_a_daemon_runs_names_that_daemon(data_dir):
+    first = _findata(data_dir, "start", "--background")
+    try:
+        assert first.returncode == 0, first.stderr
+        running = _pid_from(first.stdout)
+        second = _findata(data_dir, "start", "--background")
+        assert second.returncode == 1
+        assert second.stderr.startswith("Error: ")
+        assert (
+            f"already running for this data directory (pid {running})"
+            in second.stderr.splitlines()[0]
+        )
+        assert _alive(running)
+        assert int(Locations(data_dir).pid.read_text()) == running
+    finally:
+        _findata(data_dir, "stop")
+
+
+def test_background_is_refused_on_windows(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    result = CliRunner().invoke(cli.app, ["start", "--background"])
+    assert result.exit_code == 1
+    assert "not supported on Windows yet" in result.output
+    assert "findata start" in result.output
+
+
+def test_wait_timeout_without_background_is_refused():
+    result = CliRunner().invoke(cli.app, ["start", "--wait-timeout", "5"])
+    assert result.exit_code == 1
+    assert "--background" in result.output
+
+
+def test_the_ready_fd_is_not_inheritable():
+    from findata.daemon.server import ReadySignal
+
+    read_fd, write_fd = os.pipe()
+    try:
+        os.set_inheritable(write_fd, True)
+        signal_ = ReadySignal(write_fd)
+        assert not os.get_inheritable(write_fd)
+        signal_.close()
+    finally:
+        os.close(read_fd)

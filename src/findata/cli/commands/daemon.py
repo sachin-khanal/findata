@@ -12,13 +12,13 @@ from findata.cli import session
 from findata.cli.output import JsonOpt, emit, fail
 
 
-def _start_in_background(wait_timeout: float) -> None:
-    import os
+def _start_in_background(wait_timeout: float | None) -> None:
+    import sys
 
     from findata.cli import background
     from findata.locations import ClientSettings
 
-    if os.name == "nt":
+    if sys.platform.startswith("win"):
         fail(
             False,
             "--background is not supported on Windows yet; "
@@ -26,7 +26,9 @@ def _start_in_background(wait_timeout: float) -> None:
         )
     log = ClientSettings().locations.log
     try:
-        started = background.start_in_background(log, wait_timeout)
+        started = background.start_in_background(
+            log, background.DEFAULT_WAIT_S if wait_timeout is None else wait_timeout
+        )
     except (background.BackgroundStartError, OSError) as exc:
         fail(False, str(exc))
     typer.echo(f"findata daemon started in the background (pid {started.pid}). Log: {started.log}")
@@ -36,12 +38,17 @@ def start(
     background: bool = typer.Option(
         False, "--background", help="Detach: return once the daemon is ready (log: daemon.log)."
     ),
-    wait_timeout: float = typer.Option(
-        30.0, "--wait-timeout", min=1, help="With --background: seconds to wait for readiness."
+    wait_timeout: float | None = typer.Option(
+        None,
+        "--wait-timeout",
+        min=1,
+        help="With --background only: seconds to wait for readiness (default 30).",
     ),
     ready_fd: int | None = typer.Option(None, "--ready-fd", hidden=True),
 ) -> None:
     """Run the findata daemon in the foreground (Ctrl+C stops it)."""
+    if wait_timeout is not None and not background:
+        fail(False, "--wait-timeout only applies with --background.")
     if background:
         if ready_fd is not None:
             fail(False, "--background and --ready-fd cannot be combined.")

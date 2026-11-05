@@ -35,6 +35,7 @@ from findata.daemon.presence import PresenceChecker, default_presence
 from findata.daemon.scheduler import Scheduler
 from findata.locations import Locations
 from findata.privfs import create_private_file, ensure_private_dir
+from findata.readiness import READY_LINE
 from findata.runtime import build_runtime
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,7 @@ class ReadySignal:
     """
 
     def __init__(self, fd: int) -> None:
+        os.set_inheritable(fd, False)  # never leaks to a process the daemon spawns later
         self._fd: int | None = fd
 
     def send(self) -> None:
@@ -164,7 +166,9 @@ class ReadySignal:
         if fd is None:
             return
         try:
-            os.write(fd, b"ready\n")
+            os.write(fd, READY_LINE)
+        except OSError:  # the parent is gone (closed terminal, killed): keep serving
+            logger.info("Nobody is waiting for the ready signal any more.")
         finally:
             os.close(fd)
 
@@ -278,10 +282,11 @@ def _serve(
         scheduler.start()
         where = f"127.0.0.1:{listener.getsockname()[1]}" if use_tcp else str(locations.socket)
         logger.info(
-            "findata daemon (%s) listening on %s, pid %d. Press Ctrl+C to stop.",
+            "findata daemon (%s) listening on %s, pid %d. %s",
             settings.plaid_env,
             where,
             os.getpid(),
+            "Stop it with `findata stop`." if ready is not None else "Press Ctrl+C to stop.",
         )
         with _exit_on_signals(server):
             server.run(sockets=[listener])
