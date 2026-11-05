@@ -173,11 +173,32 @@ not poll each other.
 
 ### Web front end (`findata serve web`)
 
-- Serves the existing UI on 127.0.0.1:8765 and keeps the existing browser protections (token
-  header, Host allow-list, no CORS).
+- Serves the existing UI on 127.0.0.1:8765 with a Host allow-list and no CORS; how the browser
+  gets a session is in "Browser access" below (the token in the page was retired on 2026-11-05).
 - Its backend is a thin layer that calls the daemon through a typed client. It holds no keys,
   no database and no Plaid credentials.
 - Plaid Link still runs in the browser; the link token and exchange go through the daemon.
+
+### Browser access (decided by the user, 2026-11-05)
+
+The web server listens on 127.0.0.1, which every local process and every other account on the
+machine can reach. A page that carries its own credential hands that credential to anyone who
+asks for `/`, so the page carries none.
+
+- `findata serve web` prints a launch link once it is listening, and `--open` opens it in the
+  default browser. The link carries a secret in its fragment (`http://127.0.0.1:8765/#launch=…`),
+  so the secret is never sent in a request line, never written to an access log, and is removed
+  from the address bar and history as soon as the page has used it.
+- The page sends the secret once to the web server, which answers with a session cookie that is
+  HttpOnly and SameSite=Strict. Scripts on the page cannot read the cookie, and other sites
+  cannot send it.
+- Every data route needs that cookie and a fixed custom request header, which a cross-site page
+  cannot send without a CORS preflight the server never approves. The Host allow-list stays.
+- The secrets exist only in the web server's memory for one run: never on disk, never in logs.
+  Restarting `serve web` ends every browser session; the page then says to open the new link.
+- Without a session, `/` shows a page that holds no credential and no data and says to open the
+  link printed by `findata serve web`.
+- The old persistent browser token (`api.token`, the `X-Findata-Token` header) is retired.
 
 ### MCP front end (`findata serve mcp`)
 
@@ -225,6 +246,8 @@ not poll each other.
 
 - Writing launchd/systemd service files is out of scope (the foreground mode is what they
   would run). Foreground default and the `--background` flag are the user's decision.
+- *(Decided by the user, 2026-11-05: the web page carries no credential; browser sessions start
+  from a launch link printed by `serve web`. See "Browser access".)*
 - *(Revised by the user: the mcp role is read-only by default; writes need user-present
   authorization. The grant mechanism and Touch ID for human-authority operations were
   confirmed by the user on 2026-11-04; which operations prompt, and the no-prompt-possible

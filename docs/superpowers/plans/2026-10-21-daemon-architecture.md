@@ -23,6 +23,7 @@
 - Core modules (`db`, `security`, `plaid_gateway`, `sync`, `linking`, `waiting`, `queries`, `schema`, `runtime`, `contexts`) are imported only by `daemon/` plus `init`, `migrate`, `start`.
 - On macOS, creating a grant, approving an agent request, and removing an Item as `cli` or `web` need the user's presence (Touch ID or password), checked in the daemon (spec: "User presence for human-authority operations"; added 2026-11-04, Task 7b). Tests never show a real prompt: they inject a fake checker. No production code path, setting or environment variable switches the check off.
 - No polling between findata's own processes and no sleep loops waiting inside the daemon: clients follow daemon event streams, and the daemon blocks on events and timers (spec: "Events, not polling"; added 2026-11-04, Task 7d). The one remaining poll is the bounded post-link wait on Plaid's history.
+- The web page never contains a credential: browser sessions start from the launch link printed by `findata serve web` and live in an HttpOnly, SameSite=Strict cookie whose secret exists only in the web server's memory (spec: "Browser access"; decided by the user 2026-11-05, Task 11b).
 
 ## Review Focus
 
@@ -36,6 +37,7 @@ The inputs the spec implies but a straight reading would not test, most likely f
 6. **User presence:** a cancelled or timed-out prompt changes nothing; the prompt runs before the write lock is taken; the `mcp` role's own removal never prompts; a direct socket call with the `cli` credential still prompts. Pinned in Task 7b.
 7. **Streams:** an idle stream holds no thread; a client that disconnects is noticed and frees its slot; a stream opened after events were published replays them without gaps or duplicates; events never carry transaction data or secrets. Pinned in Task 7d.
 8. **Concurrent database work:** request handlers, job threads and audit writes running at once never crash the daemon or fail with "database is locked". Pinned in Task 7c.
+9. **Browser credential:** a plain `GET /` (any local process or account) returns nothing usable; the launch secret never appears in a request line, log or the address bar after use; cross-site requests cannot use the session; a restarted web server refuses old sessions. Pinned in Task 11b.
 
 ---
 
@@ -56,7 +58,7 @@ The inputs the spec implies but a straight reading would not test, most likely f
 | `findata/daemon/app.py`, `daemon/routes/*.py` | The `/v1` API. |
 | `findata/daemon/lock.py`, `daemon/server.py` | Single-instance lock; run, background spawn, stop. |
 | `findata/client/__init__.py`, `client/errors.py` | `DaemonClient`, `DaemonNotRunning`, `DaemonRejected`. |
-| `findata/web/` (rewritten; replaces `findata/api/`) | Web front end: forwards `/api/*` to the daemon; serves `index.html`. |
+| `findata/web/` (rewritten; replaces `findata/api/`) | Web front end: forwards `/api/*` to the daemon; serves `index.html`; browser sessions from a launch link (Task 11b). |
 | `findata/mcp/server.py` | MCP front end. |
 | `findata/cli/` | Data commands become client calls; new `start`, `stop`, `status`, `grant`, `revoke`, `approve`, `audit`, `serve web|mcp`. |
 | `tests/test_boundary.py`, `tests/test_daemon_e2e.py` | Import boundary; real-socket end to end. |
@@ -341,6 +343,28 @@ Added 2026-11-04 from the user's decision; spec section "Events, not polling". P
 - [ ] **Step 3: Implement** the routes and the UI section, matching the existing page's plain style.
 - [ ] **Step 4: Run** `uv run pytest -q`, then check the panel in the browser; expected PASS.
 - [ ] **Step 5: Commit** `git commit -m "Add agent-access panel to the web UI"`
+
+### Task 11b: Browser sessions from a launch link
+
+Added 2026-11-05 from the user's decision; spec section "Browser access". Placed after Task 11 (whose panel can create grants) and before Task 12.
+
+**Files:**
+- Create: `src/findata/web/session.py` (launch secret, session store, cookie and header checks)
+- Modify: `src/findata/web/{app.py,deps.py,routes.py,index.html}`, `src/findata/cli/commands/serve.py` (print the link, `--open`), `src/findata/cli/commands/setup.py` and `src/findata/locations.py`/`config.py` (stop creating and naming `api.token` if nothing else uses it)
+- Test: `tests/test_web.py`, `tests/test_web_session.py`
+
+**Interfaces:**
+- `WebSessions` (in `web/session.py`): created once per web server run with a random launch secret (32 bytes, URL-safe); `launch_url(host, port) -> str` returns `http://<host>:<port>/#launch=<secret>`; `start(secret) -> str | None` compares with `secrets.compare_digest` and returns a new random session id, or None; `valid(session_id) -> bool`. Nothing is written to disk or logged.
+- `POST /api/session` with `{"launch": "<secret>"}` and the request header `X-Findata-Request: 1`: 204 with `Set-Cookie: findata_session=<id>; HttpOnly; SameSite=Strict; Path=/` (no Max-Age: a browser-session cookie), or 401 `{"error_code": "LAUNCH_LINK_INVALID", "detail": "…open the link printed by `findata serve web`…"}`.
+- Every `/api` data route (including `/api/events` and the Task 11 panel routes) requires the `findata_session` cookie for a live session AND the `X-Findata-Request: 1` header; otherwise 401 `{"error_code": "NO_BROWSER_SESSION", "detail": "…open the link printed by `findata serve web`…"}`. `/api/health`, `/`, `/favicon.ico` and `/docs` stay open and carry no credential or data. The Host allow-list and the no-CORS rule are unchanged.
+- `index.html`: no token placeholder. On load, if `location.hash` holds `launch=…`, POST it to `/api/session`, then `history.replaceState` to `/` so the secret leaves the address bar and history; then load as today. Every request sends `X-Findata-Request: 1` and relies on the cookie (`credentials: "same-origin"`). A 401 `NO_BROWSER_SESSION` or `LAUNCH_LINK_INVALID` shows "Open the link printed by `findata serve web`" instead of data, without retrying.
+- `findata serve web [--open]`: once listening, prints `Open findata: <launch link>` to the terminal (and opens it with `webbrowser.open` when `--open` is given). The launch secret goes nowhere else.
+
+- [ ] **Step 1: Write failing tests:** `test_page_contains_no_credential` (GET / without a cookie: no secret, no session id, no data), `test_launch_secret_starts_an_httponly_samesite_strict_session` (cookie attributes checked), `test_wrong_launch_secret_is_refused`, `test_data_routes_need_the_session_cookie_and_the_request_header` (parametrized over every /api data route, incl. /api/events and the panel routes: no cookie → 401, cookie without header → 401, header without cookie → 401), `test_session_from_another_server_run_is_refused` (a cookie minted by one WebSessions is refused by a new app), `test_launch_secret_never_reaches_the_access_log` (serve through a real server on a temp socket with access logging on; the secret never appears in logged lines), `test_old_token_header_is_not_accepted`, `test_serve_web_prints_the_launch_link_and_open_opens_it` (webbrowser.open patched), `test_page_removes_the_launch_secret_from_the_address_bar` (page-string check for history.replaceState and the hash handling, since tests do not run the page's JavaScript — R40). Port the existing token-based web tests to the cookie + header.
+- [ ] **Step 2: Run** `uv run pytest tests/test_web.py tests/test_web_session.py -v`; expected FAIL.
+- [ ] **Step 3: Implement** the session module, the cookie/header dependency on the data router, the launch route, the page changes and the `serve web` output; retire `api.token` where nothing else uses it.
+- [ ] **Step 4: Run** `uv run pytest -q`; expected PASS. Then, in a visible terminal, start `serve web --open` on a Sandbox data dir and confirm: the link opens the UI with data, the address bar shows `/` afterwards, a plain `curl http://127.0.0.1:8765/` returns no credential, and `curl` on `/api/items` without the cookie is 401.
+- [ ] **Step 5: Commit** `git commit -m "Start browser sessions from a launch link instead of a token in the page"`
 
 ### Task 12: `start --background`
 
