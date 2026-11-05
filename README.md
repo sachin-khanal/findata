@@ -37,7 +37,8 @@ uv run findata serve mcp     # MCP server on stdio, for an AI agent (see below)
 ```
 
 If the daemon is not running, these commands stop with `DAEMON_NOT_RUNNING` and tell you to run
-`findata start`. After pulling updates, run `uv run findata migrate` (with the daemon stopped).
+`findata start`. After pulling updates, stop the daemon and run `uv run findata migrate`. It
+refuses to run while the daemon is up, and the daemon cannot start while it runs.
 
 ### Connect an agent
 
@@ -54,8 +55,9 @@ transactions straight away. It cannot change anything until you allow it.
 
 ## Agent access
 
-The agent connects with its own credential and the role `mcp`, which is read-only. Writes (`sync`,
-`remove_item`) are off until you turn them on, for a limited time.
+The agent connects with its own credential and the role `mcp`, which is read-only. Writes (the
+`sync` tool and the `remove_item` tool) are off until you turn them on, for a limited time.
+`remove_item` needs `--ops items.remove` and, as below, an approval for each removal.
 
 Turn them on from a terminal:
 

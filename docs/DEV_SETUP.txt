@@ -87,7 +87,10 @@ findata is one daemon plus front ends:
   findata serve web the web UI on 127.0.0.1:8765, a client of the daemon.
   findata serve mcp the MCP server on stdio for an agent, a client of the daemon.
 
-Only "init" and "migrate" work without the daemon. Everything else stops with
+Only "init" and "migrate" work without the daemon. "migrate" refuses while the daemon
+runs (stop it with "findata stop" first): it holds the daemon's lock for the whole
+migration, so a daemon cannot start halfway through either. "migrate --check" is
+read-only and works either way. Everything else stops with
 DAEMON_NOT_RUNNING when it is not running. Front ends never import the database,
 key or Plaid code; tests/test_boundary.py fails if they do.
 
@@ -213,6 +216,7 @@ call the alembic CLI: the database is SQLCipher-encrypted, so everything goes th
   uv run findata migrate           # apply pending migrations (copies the DB file first)
   uv run findata migrate --check   # exit 1 if the schema is behind; changes nothing
 
+  * migrate refuses (exit 1, DAEMON_RUNNING) while the daemon runs; run `findata stop` first.
   * A brand-new database is created at the latest version (`findata init` does this).
   * A database from before migrations existed is adopted as version 0001, data untouched.
   * A database that is behind is never changed implicitly: every other command stops and

@@ -195,3 +195,44 @@ def test_migrate_check_fails_when_behind(run, settings, keys, with_next_migratio
     applied = run("--json")
     assert applied.exit_code == 0 and json.loads(applied.output)["to_revision"] == "0003"
     assert json.loads(applied.output)["backup"]
+
+
+def test_migrate_refuses_while_a_daemon_holds_the_lock(run, settings, keys, with_next_migration):
+    from findata.daemon.lock import DaemonLock
+    from findata.locations import Locations
+
+    engine = make_engine(settings.db_path, keys.db_key)
+    _create_legacy_tables(engine)
+    before = settings.db_path.read_bytes()
+    locations = Locations(settings.data_dir)
+    with DaemonLock(locations.lock, locations.pid):
+        r = run("--json")
+        assert r.exit_code == 1
+        assert json.loads(r.output)["error_code"] == "DAEMON_RUNNING"
+        assert "findata stop" in r.output
+        assert run("--check", "--json").exit_code == 1  # read-only: reports, does not need the lock
+    assert settings.db_path.read_bytes() == before
+    assert not list(settings.db_path.parent.glob("*.bak-*"))
+    assert run("--json").exit_code == 0  # the lock was free again
+
+
+def test_migrate_holds_the_lock_so_a_daemon_cannot_start_meanwhile(run, settings, monkeypatch):
+    import findata.schema
+    from findata.daemon.lock import DaemonAlreadyRunning, DaemonLock
+    from findata.locations import Locations
+
+    locations = Locations(settings.data_dir)
+    real_upgrade = findata.schema.upgrade
+    seen: list[type] = []
+
+    def upgrade_while_a_daemon_tries_to_start(*a, **kw):
+        try:
+            DaemonLock(locations.lock, locations.pid).acquire()
+        except DaemonAlreadyRunning as exc:
+            seen.append(type(exc))
+        return real_upgrade(*a, **kw)
+
+    monkeypatch.setattr("findata.schema.upgrade", upgrade_while_a_daemon_tries_to_start)
+    assert run("--json").exit_code == 0
+    assert seen == [DaemonAlreadyRunning]
+    DaemonLock(locations.lock, locations.pid).acquire()  # released afterwards

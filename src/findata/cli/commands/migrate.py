@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from findata.cli.output import JsonOpt, emit, fail
+from findata.locations import Locations
 
 
 def migrate(
@@ -22,6 +23,7 @@ def migrate(
     `findata.db.bak-<timestamp>` (owner-only) before anything changes.
     """
     from findata.config import get_settings
+    from findata.daemon.lock import DaemonAlreadyRunning, DaemonLock
     from findata.db import make_engine
     from findata.schema import current_revision, head_revision, upgrade
     from findata.security import load_keys
@@ -44,7 +46,24 @@ def migrate(
             revision=now,
             head=head,
         )
-    result = upgrade(engine, backup=backup)
+    # Hold the daemon's lock for the whole migration: a running daemon has the database open
+    # and checks the schema only at start-up, and a daemon cannot start halfway through.
+    locations = Locations(s.data_dir)
+    lock = DaemonLock(locations.lock, locations.pid)
+    try:
+        lock.acquire()
+    except DaemonAlreadyRunning as exc:
+        who = f" (pid {exc.pid})" if exc.pid is not None else ""
+        fail(
+            as_json,
+            f"The findata daemon is running{who}, or another migrate is. "
+            "Stop it with `findata stop`, then run `findata migrate`. Nothing was changed.",
+            error_code="DAEMON_RUNNING",
+        )
+    try:
+        result = upgrade(engine, backup=backup)
+    finally:
+        lock.release()
     if result.adopted and not result.changed:
         emit(
             as_json,
