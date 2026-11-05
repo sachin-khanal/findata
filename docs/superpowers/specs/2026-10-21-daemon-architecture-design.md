@@ -190,10 +190,13 @@ asks for `/`, so the page carries none.
   so the secret is never sent in a request line, never written to an access log, and is removed
   from the address bar and history as soon as the page has used it.
 - The page sends the secret once to the web server, which answers with a session cookie that is
-  HttpOnly and SameSite=Strict. Scripts on the page cannot read the cookie, and other sites
-  cannot send it.
-- Every data route needs that cookie and a fixed custom request header, which a cross-site page
-  cannot send without a CORS preflight the server never approves. The Host allow-list stays.
+  HttpOnly and SameSite=Strict, and with the session's key in the response body.
+- Every data route needs that cookie and a second per-session key that the page keeps in its own
+  storage and sends as a request header. Browsers send cookies for 127.0.0.1 to every port, so
+  another local web server could receive the cookie; page storage is kept apart per port, so it
+  never gets the key, and scripts on the page (Plaid's included) never see the cookie. Neither
+  half works alone. A cross-site page cannot send the header without a CORS preflight, which
+  the server never approves. The Host allow-list stays.
 - The secrets exist only in the web server's memory for one run: never on disk, never in logs.
   Restarting `serve web` ends every browser session; the page then says to open the new link.
 - Without a session, `/` shows a page that holds no credential and no data and says to open the
