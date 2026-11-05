@@ -8,6 +8,16 @@ from findata.cli.output import JsonOpt, emit, fail
 from findata.locations import Locations
 
 
+def _open(s, as_json: bool):
+    from findata.db import make_engine
+    from findata.security import load_keys
+
+    try:
+        return make_engine(s.db_path, load_keys(s).db_key)
+    except RuntimeError as exc:
+        fail(as_json, str(exc), error_code="NOT_CONFIGURED")
+
+
 def migrate(
     check: bool = typer.Option(
         False, "--check", help="Only report whether the schema is current; exit 1 if it is not."
@@ -24,17 +34,12 @@ def migrate(
     """
     from findata.config import get_settings
     from findata.daemon.lock import DaemonAlreadyRunning, DaemonLock
-    from findata.db import make_engine
     from findata.schema import current_revision, head_revision, upgrade
-    from findata.security import load_keys
 
     s = get_settings()
-    try:
-        engine = make_engine(s.db_path, load_keys(s).db_key)
-    except RuntimeError as exc:
-        fail(as_json, str(exc), error_code="NOT_CONFIGURED")
     head = head_revision()
-    if check:
+    if check:  # read-only: no lock needed
+        engine = _open(s, as_json)
         now = current_revision(engine)
         if now == head:
             emit(as_json, f"Schema is current (version {head}).", event="current", revision=head)
@@ -47,7 +52,8 @@ def migrate(
             head=head,
         )
     # Hold the daemon's lock for the whole migration: a running daemon has the database open
-    # and checks the schema only at start-up, and a daemon cannot start halfway through.
+    # and checks the schema only at start-up, and a daemon cannot start halfway through. The
+    # lock comes before the keys and the database are touched, so a refused migrate does nothing.
     locations = Locations(s.data_dir)
     lock = DaemonLock(locations.lock, locations.pid)
     try:
@@ -61,7 +67,7 @@ def migrate(
             error_code="DAEMON_RUNNING",
         )
     try:
-        result = upgrade(engine, backup=backup)
+        result = upgrade(_open(s, as_json), backup=backup)
     finally:
         lock.release()
     if result.adopted and not result.changed:

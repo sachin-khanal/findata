@@ -236,3 +236,19 @@ def test_migrate_holds_the_lock_so_a_daemon_cannot_start_meanwhile(run, settings
     assert run("--json").exit_code == 0
     assert seen == [DaemonAlreadyRunning]
     DaemonLock(locations.lock, locations.pid).acquire()  # released afterwards
+
+
+def test_refused_migrate_loads_no_keys_and_opens_no_database(run, settings, monkeypatch):
+    from findata.daemon.lock import DaemonLock
+    from findata.locations import Locations
+
+    def boom(*a, **kw):
+        raise AssertionError("a refused migrate must not touch keys or the database")
+
+    monkeypatch.setattr("findata.security.load_keys", boom)
+    monkeypatch.setattr("findata.db.make_engine", boom)
+    locations = Locations(settings.data_dir)
+    with DaemonLock(locations.lock, locations.pid):
+        r = run("--json")
+    assert r.exit_code == 1 and json.loads(r.output)["error_code"] == "DAEMON_RUNNING"
+    assert not settings.db_path.exists()
