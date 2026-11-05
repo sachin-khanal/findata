@@ -316,11 +316,13 @@ Added 2026-11-04 from the user's decision; spec section "Events, not polling". P
 - Consumes: `DaemonClient` (role `mcp`).
 - Produces: `build_mcp_server(client: DaemonClient) -> FastMCP` with read tools `get_status()`, `list_items()`, `list_accounts()`, `list_transactions(start=None, end=None, account_id=None, category=None, limit=100, offset=0)`, and write tools `sync()`, `remove_item(item_id: str, request_id: str | None = None)`; each write tool's description states that it needs a human grant. `findata serve mcp` runs it over stdio.
 
-- [ ] **Step 1: Write failing tests** with the MCP SDK's in-memory client session against an in-process daemon: `test_read_tools_return_daemon_data`, `test_write_tool_without_grant_returns_a_clear_human_must_authorize_error`, `test_write_tool_succeeds_after_grant_and_fails_after_expiry_and_revoke`, `test_remove_item_returns_request_id_then_needs_human_approval`, `test_tools_report_daemon_not_running_clearly`, `test_mcp_module_never_imports_core_modules` (subprocess import check as in Task 9), `test_tool_list_marks_write_tools_as_requiring_a_grant`.
-- [ ] **Step 2: Run** `uv run pytest tests/test_mcp.py -v`; expected FAIL.
-- [ ] **Step 3: Implement** with the official SDK (confirm its current FastMCP API against its docs); map `DaemonRejected(WRITE_NOT_GRANTED)` to a tool error whose message tells the agent to ask the user to run `findata grant mcp-write`.
-- [ ] **Step 4: Run** `uv run pytest -q`; expected PASS.
-- [ ] **Step 5: Commit** `git commit -m "Add MCP front end: read tools and grant-gated write tools"`
+- [x] **Step 1: Write failing tests** with the MCP SDK's in-memory client session against an in-process daemon: `test_read_tools_return_daemon_data`, `test_write_tool_without_grant_returns_a_clear_human_must_authorize_error`, `test_write_tool_succeeds_after_grant_and_fails_after_expiry_and_revoke`, `test_remove_item_returns_request_id_then_needs_human_approval`, `test_tools_report_daemon_not_running_clearly`, `test_mcp_module_never_imports_core_modules` (subprocess import check as in Task 9), `test_tool_list_marks_write_tools_as_requiring_a_grant`.
+- [x] **Step 2: Run** `uv run pytest tests/test_mcp.py -v`; expected FAIL.
+- [x] **Step 3: Implement** with the official SDK (confirm its current FastMCP API against its docs); map `DaemonRejected(WRITE_NOT_GRANTED)` to a tool error whose message tells the agent to ask the user to run `findata grant mcp-write`.
+- [x] **Step 4: Run** `uv run pytest -q`; expected PASS.
+- [x] **Step 5: Commit** `git commit -m "Add MCP front end: read tools and grant-gated write tools"`
+
+**Done:** 68741cf, review fixes fe07fc3 (a timeout has its own message; the not-granted hint names `--ops <operation>`; the MCP server logs only warnings). Built on mcp 2.3.0, whose server class is `MCPServer` (FastMCP no longer exists, ruling R38); `serve mcp` lives in `cli/commands/serve.py` (R34). Also checked with a real stdio client against a Sandbox daemon.
 
 ### Task 11: Web approval panel
 
