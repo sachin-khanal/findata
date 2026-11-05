@@ -379,11 +379,13 @@ Added 2026-11-05 from the user's decision; spec section "Browser access". Placed
 **Interfaces:**
 - Produces: `findata start --background` spawns the daemon detached (new session, stdout/stderr to `Locations.log`), waits for a ready signal from the child (the parent passes the write end of a pipe with `pass_fds`, the child writes one line once its listener is bound and serving, and the parent blocks on the read end with a timeout; EOF before the line means the child died), then exits 0 printing the pid and log path; if the child exits first or the wait times out it prints the reason (last log lines) and exits 1.
 
-- [ ] **Step 1: Write failing tests:** `test_background_start_returns_when_the_daemon_is_ready`, `test_background_start_fails_loudly_if_the_child_dies` (force a schema-behind database; exit 1, message includes `findata migrate`, no stray process), `test_background_daemon_logs_to_file_and_not_the_terminal`, `test_status_and_stop_work_on_a_backgrounded_daemon`, `test_log_file_is_owner_only_and_contains_no_credentials`, `test_background_start_waits_on_the_ready_signal` (the parent makes no status requests while waiting).
-- [ ] **Step 2: Run** `uv run pytest tests/test_daemon_background.py -v`; expected FAIL.
-- [ ] **Step 3: Implement** with `subprocess.Popen(..., start_new_session=True)` re-invoking `python -m findata start`; readiness comes from the pipe, never from polling the client.
-- [ ] **Step 4: Run** `uv run pytest -q`; expected PASS.
-- [ ] **Step 5: Commit** `git commit -m "Add start --background"`
+- [x] **Step 1: Write failing tests:** `test_background_start_returns_when_the_daemon_is_ready`, `test_background_start_fails_loudly_if_the_child_dies` (force a schema-behind database; exit 1, message includes `findata migrate`, no stray process), `test_background_daemon_logs_to_file_and_not_the_terminal`, `test_status_and_stop_work_on_a_backgrounded_daemon`, `test_log_file_is_owner_only_and_contains_no_credentials`, `test_background_start_waits_on_the_ready_signal` (the parent makes no status requests while waiting).
+- [x] **Step 2: Run** `uv run pytest tests/test_daemon_background.py -v`; expected FAIL.
+- [x] **Step 3: Implement** with `subprocess.Popen(..., start_new_session=True)` re-invoking `python -m findata start`; readiness comes from the pipe, never from polling the client.
+- [x] **Step 4: Run** `uv run pytest -q`; expected PASS.
+- [x] **Step 5: Commit** `git commit -m "Add start --background"`
+
+**Done:** ddd6e2f, review fixes ec7855b (a parent that went away during startup no longer kills the daemon at ready; the already-running failure leads with the daemon's own message). The child gets the pipe through a hidden `--ready-fd` (ruling R51); POSIX only for now (R52). Checked by hand on a Sandbox data dir: ready in about 0.6 s, detached with no terminal, owner-only log, status and stop work, a second start is refused with no extra process.
 
 ### Task 13: Boundary test, end-to-end test, docs
 
