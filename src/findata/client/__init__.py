@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 from urllib.parse import quote
 
@@ -88,6 +88,7 @@ class DaemonClient:
         timeout: float = 10.0,
         long_timeout: float = 180.0,
         http_client: httpx2.Client | None = None,
+        async_http_client: httpx2.AsyncClient | None = None,
     ) -> None:
         self._locations = Locations(data_dir)
         self._role = role
@@ -95,6 +96,8 @@ class DaemonClient:
         self._long_timeout = long_timeout
         self._http = http_client
         self._owns_http = http_client is None
+        self._ahttp = async_http_client
+        self._owns_ahttp = async_http_client is None
         self._credential: str | None = None
 
     def __repr__(self) -> str:
@@ -136,6 +139,9 @@ class DaemonClient:
         return self._http
 
     def _connect_tcp(self) -> httpx2.Client:
+        return httpx2.Client(base_url=self._tcp_base_url(), timeout=self._timeout)
+
+    def _tcp_base_url(self) -> str:
         """Loopback fallback. Never sends anything unless a live daemon holds its lock, so a
         stale port file cannot lead the credential to some other local process."""
         if not daemon_lock_held(self._locations.lock):
@@ -144,12 +150,34 @@ class DaemonClient:
             port = int(self._locations.port_file.read_text().strip())
         except (OSError, ValueError):
             raise DaemonNotRunning(NOT_RUNNING_MESSAGE) from None
-        return httpx2.Client(base_url=f"http://127.0.0.1:{port}", timeout=self._timeout)
+        return f"http://127.0.0.1:{port}"
+
+    def _aconnect(self) -> httpx2.AsyncClient:
+        """The async twin of `_connect`, made on first use inside the running event loop."""
+        if self._ahttp is not None:
+            return self._ahttp
+        if os.name == "nt":
+            self._ahttp = httpx2.AsyncClient(base_url=self._tcp_base_url(), timeout=self._timeout)
+        else:
+            socket_path = self._locations.socket
+            if not socket_path.exists():
+                raise DaemonNotRunning(NOT_RUNNING_MESSAGE)
+            self._ahttp = httpx2.AsyncClient(
+                transport=httpx2.AsyncHTTPTransport(uds=str(socket_path)),
+                base_url=_BASE_URL,
+                timeout=self._timeout,
+            )
+        return self._ahttp
 
     def close(self) -> None:
         if self._owns_http and self._http is not None:
             self._http.close()
             self._http = None
+
+    async def aclose(self) -> None:
+        if self._owns_ahttp and self._ahttp is not None:
+            await self._ahttp.aclose()
+            self._ahttp = None
 
     def _request(
         self, method: str, path: str, *, timeout: float | None = None, **kwargs: Any
@@ -225,6 +253,45 @@ class DaemonClient:
                 "The findata daemon stopped before the job finished; the job did not survive "
                 "it. Start the daemon with `findata start` and run the command again."
             )
+
+    async def _astream(
+        self, path: str, *, params: dict[str, Any] | None, keepalives: bool
+    ) -> AsyncIterator[dict]:
+        """`_stream` for an event loop: opened before it returns, so a refusal or a stopped
+        daemon raises here; holds no thread while idle. Closing the iterator (`aclose`) closes
+        the connection, which frees the daemon's stream slot."""
+        lines = self._astream_lines(path, params, keepalives)
+        await anext(lines)  # runs up to the response's arrival; the generator closes the stream
+        return lines
+
+    async def _astream_lines(
+        self, path: str, params: dict[str, Any] | None, keepalives: bool
+    ) -> AsyncIterator[dict]:
+        credential = self._credential_value()
+        http = self._aconnect()
+        timeout = httpx2.Timeout(self._timeout, read=None)
+        try:
+            async with http.stream(
+                "GET",
+                path,
+                params=params,
+                headers={CREDENTIAL_HEADER: credential},
+                extensions={"timeout": timeout.as_dict()},
+            ) as response:
+                if not response.is_success:
+                    await response.aread()
+                    raise self._rejection(response)
+                yield {}  # the stream is open; `_astream` drops this one
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    event = _event(line, response.status_code)
+                    if keepalives or event.get("event") != KEEPALIVE_EVENT:
+                        yield event
+        except httpx2.TimeoutException:
+            raise _timed_out(self._timeout) from None
+        except (httpx2.TransportError, FileNotFoundError, ConnectionRefusedError):
+            raise DaemonNotRunning(NOT_RUNNING_MESSAGE) from None
 
     @staticmethod
     def _rejection(response: httpx2.Response) -> DaemonRejected:
@@ -328,6 +395,13 @@ class DaemonClient:
         )
         return data["job_id"]
 
+    def start_history(self, item_id: str, *, timeout: float | None = None) -> str:
+        """Start a job that waits for an already-linked Item's history; returns its job id."""
+        data = self._json(
+            "POST", "/v1/jobs/history", json={"item_id": item_id}, timeout=self._long(timeout)
+        )
+        return data["job_id"]
+
     def job(self, job_id: str, *, timeout: float | None = None) -> JobOut:
         return JobOut.model_validate(self._json("GET", f"/v1/jobs/{_seg(job_id)}", timeout=timeout))
 
@@ -346,6 +420,15 @@ class DaemonClient:
         daemon stops."""
         params = {} if after is None else {"after": after}
         return self._stream("/v1/events", params=params)
+
+    async def aevents(
+        self, after: int | None = None, *, keepalives: bool = False
+    ) -> AsyncIterator[dict]:
+        """`events` for an event loop: `stream = await client.aevents()`, then `async for` it
+        and `await stream.aclose()` when done. Keep-alive lines are skipped unless
+        `keepalives` (a relay forwards them so its own client can tell the link is alive)."""
+        params = {} if after is None else {"after": after}
+        return await self._astream("/v1/events", params=params, keepalives=keepalives)
 
     # ---------- human controls ----------
     # The daemon asks for Touch ID or the password before a grant or an approval and waits up

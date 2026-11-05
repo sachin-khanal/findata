@@ -11,6 +11,7 @@ from findata.cli.commands import (
     items,
     migrate,
     sandbox_link,
+    serve,
     setup,
     sync,
     txns,
@@ -22,7 +23,7 @@ app.command()(setup.init)
 app.command()(daemon.start)
 app.command()(daemon.stop)
 app.command()(daemon.status)
-app.command()(setup.serve)
+app.add_typer(serve.app, name="serve")
 app.command("sandbox-link")(sandbox_link.sandbox_link)
 app.add_typer(items.app, name="items")
 app.command()(migrate.migrate)

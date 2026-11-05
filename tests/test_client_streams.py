@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import socket
@@ -138,3 +139,46 @@ def test_stream_refusals_raise_daemon_rejected(tmp_path):
     with pytest.raises(DaemonRejected) as e:
         _mock(tmp_path, handler).events()
     assert e.value.error_code == "TOO_MANY_STREAMS" and e.value.status == 503
+
+
+def test_start_history_posts_the_item_and_returns_the_job_id(tmp_path):
+    seen = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append((request.method, request.url.path, json.loads(request.content)))
+        return httpx2.Response(202, json={"job_id": "j1"})
+
+    assert _mock(tmp_path, handler).start_history("item_1") == "j1"
+    assert seen == [("POST", "/v1/jobs/history", {"item_id": "item_1"})]
+
+
+def test_aevents_skips_or_keeps_keepalives_and_maps_refusals(tmp_path):
+    first = {"seq": 1, "event": "item_removed", "at": "2026-10-21T09:00:00Z", "item_id": "i"}
+    body = _ndjson({"event": "keepalive"}, first)
+    seen = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request.extensions["timeout"])
+        if request.url.params.get("after") == "9":
+            return httpx2.Response(409, json={"error_code": "TOO_MANY", "detail": "full"})
+        return httpx2.Response(200, content=body)
+
+    ahttp = httpx2.AsyncClient(transport=httpx2.MockTransport(handler), base_url="http://daemon")
+    c = DaemonClient(_cred_dir(tmp_path), "cli", async_http_client=ahttp, timeout=4)
+
+    async def run():
+        plain = [e async for e in await c.aevents()]
+        kept = [e async for e in await c.aevents(keepalives=True)]
+        with pytest.raises(DaemonRejected) as e:
+            await c.aevents(after=9)  # refused when awaited, before any iteration
+        return plain, kept, e.value
+
+    plain, kept, refused = asyncio.run(run())
+    assert plain == [first] and kept == [{"event": "keepalive"}, first]
+    assert seen[0] == {"connect": 4, "read": None, "write": 4, "pool": 4}
+    assert refused.error_code == "TOO_MANY" and refused.status == 409
+
+
+def test_aevents_without_a_daemon_raises_not_running(tmp_path):
+    with pytest.raises(DaemonNotRunning):
+        asyncio.run(DaemonClient(_cred_dir(tmp_path), "cli").aevents())

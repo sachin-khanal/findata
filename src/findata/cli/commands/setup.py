@@ -1,4 +1,4 @@
-"""`init` and `serve`: prepare the data directory and run the local web UI."""
+"""`init`: prepare the data directory."""
 
 from __future__ import annotations
 
@@ -20,15 +20,3 @@ def init() -> None:
     CredentialStore(Locations(s.data_dir)).ensure_all()
     ensure_current(make_engine(s.db_path, keys.db_key))
     typer.echo(f"Initialized {s.data_dir}")
-
-
-def serve() -> None:
-    """Run the local web UI + API on 127.0.0.1."""
-    import uvicorn
-
-    from findata.api import create_app
-    from findata.config import get_settings
-
-    s = get_settings()
-    typer.echo(f"findata ({s.plaid_env}) → http://{s.findata_host}:{s.findata_port}")
-    uvicorn.run(create_app(s), host=s.findata_host, port=s.findata_port)
