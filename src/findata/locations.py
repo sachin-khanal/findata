@@ -40,10 +40,6 @@ class Locations:
     def credentials_dir(self) -> Path:
         return self.data_dir / "credentials"
 
-    @property
-    def api_token(self) -> Path:
-        return self.data_dir / "api.token"
-
 
 class ClientSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

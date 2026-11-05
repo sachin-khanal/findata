@@ -1,15 +1,19 @@
-"""FastAPI dependencies for the web front end: the daemon client and token auth."""
+"""FastAPI dependencies for the web front end: the daemon client and the browser session."""
 
 from __future__ import annotations
 
-import secrets
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Header, Request
 
 from findata.client import DaemonClient
+from findata.web.session import COOKIE_NAME, KEY_HEADER
 
-TOKEN_HEADER = "X-Findata-Token"  # noqa: S105 (header name, not a secret)
+OPEN_LINK = "Open the link printed by `findata serve web`."
+
+
+class BrowserSessionRequired(Exception):
+    """No valid session cookie and request key; the app answers 401 NO_BROWSER_SESSION."""
 
 
 def get_client(request: Request) -> DaemonClient:
@@ -19,12 +23,13 @@ def get_client(request: Request) -> DaemonClient:
 ClientDep = Annotated[DaemonClient, Depends(get_client)]
 
 
-def require_token(
+def require_session(
     request: Request,
-    token: Annotated[str | None, Header(alias=TOKEN_HEADER)] = None,
+    key: Annotated[str | None, Header(alias=KEY_HEADER)] = None,
 ) -> None:
-    if not token or not secrets.compare_digest(token, request.app.state.api_token):
-        raise HTTPException(401, f"Missing or invalid {TOKEN_HEADER} header")
+    """Both halves of one session: the cookie and its request key. Either alone is refused."""
+    if not request.app.state.sessions.valid(request.cookies.get(COOKIE_NAME), key):
+        raise BrowserSessionRequired
 
 
-auth = [Depends(require_token)]
+auth = [Depends(require_session)]

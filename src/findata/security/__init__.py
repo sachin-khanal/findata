@@ -25,7 +25,6 @@ from findata.security.files import (
 from findata.security.keychain import KeychainUnavailableError
 from findata.security.keys import Keys, load_keys
 from findata.security.masterkey import load_or_create_master_key
-from findata.security.token import load_or_create_api_token
 
 __all__ = [
     "FieldCipher",
@@ -34,7 +33,6 @@ __all__ = [
     "create_private_file",
     "ensure_private_dir",
     "load_keys",
-    "load_or_create_api_token",
     "load_or_create_master_key",
     "load_or_create_secret",
     "read_secret_file",

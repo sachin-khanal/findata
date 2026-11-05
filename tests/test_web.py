@@ -14,9 +14,8 @@ from fastapi.testclient import TestClient
 
 from findata.client import DaemonClient
 from findata.client.errors import DaemonNotRunning, DaemonRejected
-from findata.privfs import load_or_create_api_token
 from findata.web.app import create_web_app
-from findata.web.deps import TOKEN_HEADER
+from findata.web.session import KEY_HEADER, WebSessions
 from findata.wire import SyncOut
 from tests.conftest import FakeGateway, account, txn
 from tests.test_daemon_events import _build, _eventually, _names, _published, serve
@@ -83,8 +82,16 @@ def web_client(d, **kw) -> DaemonClient:
 
 
 def make_app(d, settings, client=None):
-    token = load_or_create_api_token(settings.data_dir / "api.token")
-    return create_web_app(client or web_client(d), token)
+    return create_web_app(client or web_client(d), WebSessions())
+
+
+def login(browser) -> dict[str, str]:
+    """Start a session the way the page does (POST the launch secret). The browser object keeps
+    the cookie; the returned header is the per-session request key the page keeps in storage."""
+    secret = browser.app.state.sessions.launch_secret
+    r = browser.post("/api/session", json={"launch": secret})
+    assert r.status_code == 200
+    return {KEY_HEADER: r.json()["request_key"]}
 
 
 @pytest.fixture
@@ -93,8 +100,8 @@ def client(d, settings):
 
 
 @pytest.fixture
-def auth(settings):
-    return {TOKEN_HEADER: load_or_create_api_token(settings.data_dir / "api.token")}
+def auth(client):
+    return login(client)
 
 
 def test_health_is_public(client):
@@ -103,9 +110,9 @@ def test_health_is_public(client):
 
 
 @pytest.mark.parametrize("path", ["/api/accounts", "/api/transactions", "/api/items"])
-def test_api_requires_token(client, path):
+def test_api_requires_a_session(client, path):
     assert client.get(path).status_code == 401
-    assert client.get(path, headers={TOKEN_HEADER: "wrong"}).status_code == 401
+    assert client.get(path, headers={KEY_HEADER: "wrong"}).status_code == 401
 
 
 def test_rejects_foreign_host_header(d, settings):
@@ -113,10 +120,10 @@ def test_rejects_foreign_host_header(d, settings):
     assert c.get("/api/health").status_code == 400
 
 
-def test_index_injects_token(client, auth):
+def test_index_fills_the_environment_and_no_credential(client, auth):
     html = client.get("/").text
-    assert auth[TOKEN_HEADER] in html and "__FINDATA_TOKEN__" not in html
-    assert "__PLAID_ENV__" not in html
+    assert auth[KEY_HEADER] not in html and "__FINDATA_TOKEN__" not in html
+    assert "__PLAID_ENV__" not in html and "__USER_PRESENCE__" not in html
 
 
 def test_link_exchange_sync_and_query(client, auth, monkeypatch):
@@ -173,9 +180,10 @@ class DownClient(DaemonClient):
         raise DaemonNotRunning("The findata daemon is not running. Start it with `findata start`.")
 
 
-def test_web_returns_503_with_start_hint_when_daemon_is_down(settings, auth, d):
+def test_web_returns_503_with_start_hint_when_daemon_is_down(settings, d):
     down = DownClient(settings.data_dir)
     c = TestClient(make_app(d, settings, down), base_url="http://127.0.0.1")
+    auth = login(c)
     for path in ("/api/health", "/api/items", "/api/accounts", "/api/transactions"):
         r = c.get(path, headers=auth)
         assert r.status_code == 503, path
@@ -185,16 +193,17 @@ def test_web_returns_503_with_start_hint_when_daemon_is_down(settings, auth, d):
         assert c.post(path, headers=auth).status_code == 503
     r = c.get("/api/events", headers=auth)
     assert r.status_code == 503 and r.json()["error_code"] == "DAEMON_NOT_RUNNING"
-    # The page itself still loads, with the token and no Plaid environment filled in.
+    # The page itself still loads, with no Plaid environment filled in.
     page = c.get("/")
-    assert page.status_code == 200 and auth[TOKEN_HEADER] in page.text
+    assert page.status_code == 200 and auth[KEY_HEADER] not in page.text
     assert "__PLAID_ENV__" not in page.text
 
 
-def test_daemon_timeout_is_a_504_and_a_rejection_passes_through(d, settings, auth, monkeypatch):
+def test_daemon_timeout_is_a_504_and_a_rejection_passes_through(d, settings, monkeypatch):
     from findata.client.errors import DaemonTimeout
 
     c = TestClient(make_app(d, settings), base_url="http://127.0.0.1")
+    auth = login(c)
 
     def slow(self, **kw):
         raise DaemonTimeout("The findata daemon did not answer within 180 s.")
@@ -282,10 +291,11 @@ def test_exchange_succeeds_when_a_job_is_already_running(client, auth, d, monkey
     assert r.status_code == 200 and r.json()["id"] == "item_1"
 
 
-def test_sync_starts_a_history_job_while_history_is_loading(settings, keys, auth):
+def test_sync_starts_a_history_job_while_history_is_loading(settings, keys):
     clock = Clock()
     d = _build(settings, keys, FakeGateway(UNSTARTED), sleep=clock.sleep, clock=clock.monotonic)
     c = TestClient(make_app(d, settings), base_url="http://127.0.0.1")
+    auth = login(c)
     linked = d.client.post(  # straight to the daemon, so no job has started yet
         "/v1/link/exchange", headers=d.as_["cli"], json={"public_token": "public-sandbox-ok"}
     )
@@ -308,9 +318,9 @@ def test_sync_with_complete_history_starts_no_job(client, auth, d):
 # ---------- events ----------
 
 
-def test_web_events_relays_daemon_events_and_needs_the_token(client, auth, d):
+def test_web_events_relays_daemon_events_and_needs_a_session(client, auth, d):
     assert client.get("/api/events").status_code == 401
-    assert client.get("/api/events", headers={TOKEN_HEADER: "wrong"}).status_code == 401
+    assert client.get("/api/events", headers={KEY_HEADER: "wrong"}).status_code == 401
 
     d.events.publish("item_removed", item_id="item_1")
     d.events.publish("item_linked", item_id="item_2", institution="Bank")
@@ -324,7 +334,7 @@ def test_web_events_relays_daemon_events_and_needs_the_token(client, auth, d):
 def test_served_page_is_one_page(client):
     html = client.get("/").text
     assert html.count("<script>") == 1 and html.count("<script") == 2  # inline + Plaid's
-    assert html.count('id="status"') == 1 and html.count("const TOKEN") == 1
+    assert html.count('id="status"') == 1 and html.count("const PRESENCE") == 1
     assert html.count("</html>") == 1 and html.rstrip().endswith("</html>")
 
 
@@ -348,15 +358,19 @@ def test_browser_disconnect_frees_the_daemon_stream_slot(settings, keys, gateway
                 transport=httpx2.AsyncHTTPTransport(uds=str(daemon_sock)), base_url="http://daemon"
             ),
         )
-        token = load_or_create_api_token(settings.data_dir / "api.token")
-        web = SimpleNamespace(app=create_web_app(upstream, token), events=d.events)
+        web = SimpleNamespace(app=create_web_app(upstream), events=d.events)
         with serve(web) as web_sock:
             browser = httpx2.Client(
                 transport=httpx2.HTTPTransport(uds=str(web_sock)),
                 base_url="http://127.0.0.1",
                 timeout=5,
             )
-            with browser.stream("GET", "/api/events", headers={TOKEN_HEADER: token}) as r:
+            key = browser.post(
+                "/api/session", json={"launch": web.app.state.sessions.launch_secret}
+            )
+            with browser.stream(
+                "GET", "/api/events", headers={KEY_HEADER: key.json()["request_key"]}
+            ) as r:
                 assert r.status_code == 200
                 _eventually(lambda: len(d.events._streams) == 1, "the daemon-side stream to open")
                 d.events.publish("item_removed", item_id="item_1")
@@ -388,13 +402,13 @@ def test_shutdown_ends_open_event_streams_cleanly(settings, keys, gateway, caplo
                 transport=httpx2.AsyncHTTPTransport(uds=str(daemon_sock)), base_url="http://daemon"
             ),
         )
-        token = load_or_create_api_token(settings.data_dir / "api.token")
+        app = create_web_app(upstream)
         folder = Path(tempfile.mkdtemp(dir="/tmp", prefix="fw"))
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.bind(str(folder / "w.sock"))
         sock.listen()
         server = WebServer(
-            create_web_app(upstream, token),
+            app,
             lifespan="off",
             log_config=None,
             access_log=False,
@@ -408,7 +422,10 @@ def test_shutdown_ends_open_event_streams_cleanly(settings, keys, gateway, caplo
             timeout=10,
         )
         try:
-            with browser.stream("GET", "/api/events", headers={TOKEN_HEADER: token}) as r:
+            key = browser.post("/api/session", json={"launch": app.state.sessions.launch_secret})
+            with browser.stream(
+                "GET", "/api/events", headers={KEY_HEADER: key.json()["request_key"]}
+            ) as r:
                 assert r.status_code == 200
                 _eventually(lambda: len(d.events._streams) == 1, "the daemon-side stream to open")
                 started = time.monotonic()
@@ -461,11 +478,11 @@ def test_web_lists_and_approves_pending_removals(client, auth, d, keys):
     assert client.post(f"/api/approvals/{rid}", headers=auth).status_code == 404
 
 
-def test_web_grant_requires_the_browser_token(client, d, keys):
+def test_web_grant_requires_the_browser_session(client, d, keys):
     _with_item(d, keys)
     rid = d.approvals.request("items.remove", "item_1")
     body = {"operations": ["sync"], "ttl_s": 900}
-    bad = {TOKEN_HEADER: "wrong"}
+    bad = {KEY_HEADER: "wrong"}
     for headers in ({}, bad):
         assert client.get("/api/grants", headers=headers).status_code == 401
         assert client.post("/api/grants", headers=headers, json=body).status_code == 401
@@ -555,11 +572,12 @@ def test_panel_starts_neutral_and_shows_the_date_of_a_later_expiry():
     assert "toDateString()" in html  # a grant ending on another day shows its date
 
 
-def test_web_down_panel_routes_and_page(settings, auth, d):
+def test_web_down_panel_routes_and_page(settings, d):
     down = TestClient(
         make_app(d, settings, DownClient(settings.data_dir)),
         base_url="http://127.0.0.1",
     )
+    auth = login(down)
     assert 'const PRESENCE = ""' in down.get("/").text
     body = {"operations": ["sync"], "ttl_s": 900}
     for r in (

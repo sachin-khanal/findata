@@ -42,8 +42,9 @@ Plaid ──/transactions/sync──▶ sync.py ──▶ SQLite (~/.findata/fin
   tokens and raw payloads are additionally AES-256-GCM encrypted per field. Both keys derive
   from one master key kept in the OS keychain (owner-only file fallback on headless machines).
   See [ADR 0002](docs/adr/0002-layered-encryption-at-rest.md).
-- **Local API** needs an `X-Findata-Token` header (from `~/.findata/api.token`). It only
-  accepts `localhost`/`127.0.0.1` Host headers, which blocks DNS-rebinding and cross-site requests.
+- **Local web API** needs a browser session, started from the launch link that
+  `findata serve web` prints (an HttpOnly cookie plus a per-session key; nothing is stored on disk).
+  It only accepts `localhost`/`127.0.0.1` Host headers, which blocks DNS-rebinding and cross-site requests.
 - **Money** is stored and returned as exact decimal strings. Plaid's sign convention applies:
   positive = money out, negative = money in.
 

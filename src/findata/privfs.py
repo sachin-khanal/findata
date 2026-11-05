@@ -6,7 +6,6 @@ Deliberately crypto-free (stdlib only) so front ends can import it without the k
 from __future__ import annotations
 
 import os
-import secrets
 from pathlib import Path
 
 # POSIX permission bits are meaningless on Windows (st_mode always looks world-accessible);
@@ -66,12 +65,3 @@ def load_or_create_secret(path: Path, factory) -> bytes:
     value = factory()
     write_secret_file(path, value)
     return value
-
-
-def load_or_create_api_token(path: Path) -> str:
-    """The local API token that gates the HTTP API.
-
-    Requiring it in a custom header also forces a CORS preflight, which blocks drive-by
-    requests from other websites.
-    """
-    return load_or_create_secret(path, lambda: secrets.token_urlsafe(32).encode()).decode()

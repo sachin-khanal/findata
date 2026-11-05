@@ -5,7 +5,7 @@ from findata.locations import ClientSettings, Locations
 
 def test_locations_are_inside_the_data_dir(tmp_path: Path):
     loc = Locations(tmp_path)
-    for name in ("socket", "lock", "pid", "log", "port_file", "api_token"):
+    for name in ("socket", "lock", "pid", "log", "port_file"):
         assert getattr(loc, name).parent == tmp_path
     assert loc.credentials_dir.parent == tmp_path
 
@@ -19,7 +19,6 @@ def test_client_settings_ignore_plaid_secrets(monkeypatch):
 
 def test_security_still_exports_the_private_file_helpers():
     from findata import privfs
-    from findata.security import ensure_private_dir, load_or_create_api_token
+    from findata.security import ensure_private_dir
 
     assert ensure_private_dir is privfs.ensure_private_dir
-    assert load_or_create_api_token is privfs.load_or_create_api_token

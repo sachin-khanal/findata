@@ -64,7 +64,35 @@
   <table id="txns"></table>
   <p id="txns-empty" class="empty" hidden>No transactions yet. After you link an account, Plaid can take a minute to load it; this page updates by itself when Plaid finishes.</p>
 <script>
-const TOKEN = "__FINDATA_TOKEN__";
+// The page holds no credential. A session starts from the launch link's fragment (#launch=...):
+// the secret is posted once and removed from the address bar. The session is an HttpOnly cookie
+// plus a request key kept here in localStorage (per origin, so per port) and sent as a header;
+// the cookie alone is refused, because cookies for 127.0.0.1 reach every port.
+const KEY_STORE = "findata.session_key";
+const OPEN_LINK = "Open the link printed by `findata serve web`.";
+let sessionKey = null;
+try { sessionKey = localStorage.getItem(KEY_STORE); } catch (e) { /* storage blocked: no session */ }
+function setSessionKey(key) {
+  sessionKey = key;
+  try { key ? localStorage.setItem(KEY_STORE, key) : localStorage.removeItem(KEY_STORE); } catch (e) { /* ignore */ }
+}
+const sessionHeaders = () => (sessionKey ? { "X-Findata-Session": sessionKey } : {});
+
+async function startSession() {
+  const m = /^#launch=([A-Za-z0-9_-]+)$/.exec(location.hash);
+  if (!m) return;
+  history.replaceState(null, "", "/");  // the secret leaves the address bar and the history
+  try {
+    const res = await fetch("/api/session", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ launch: m[1] }),
+    });
+    const body = JSON.parse(await res.text());
+    if (res.ok) setSessionKey(body.request_key); else { setSessionKey(null); throw apiError(body); }
+  } catch (e) { setSessionKey(null); sessionError = e; }
+}
+let sessionError = null;
 const PRESENCE = "__USER_PRESENCE__";  // touch_id | unsupported | "" (unknown: daemon was down)
 const $ = (id) => document.getElementById(id);
 // state: idle | working | waiting | ok | error. Exposed as data-state so scripts and headless
@@ -83,7 +111,8 @@ const historyStatus = (state) => state === "done"
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
-    headers: { "Content-Type": "application/json", "X-Findata-Token": TOKEN, ...(opts.headers || {}) },
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", ...sessionHeaders(), ...(opts.headers || {}) },
   });
   if (res.status === 204) return null;  // success with no body (Revoke, Approve)
   const body = await res.json();
@@ -93,11 +122,15 @@ async function api(path, opts = {}) {
 
 // A stopped daemon is a state, not a failure of this page: say what to run.
 function apiError(body) {
-  const err = new Error(body.detail || JSON.stringify(body));
+  const noSession = body.error_code === "NO_BROWSER_SESSION" || body.error_code === "LAUNCH_LINK_INVALID";
+  if (noSession) setSessionKey(null);  // a stale key is worth nothing: no retry, ask for the link
+  const err = new Error(noSession ? OPEN_LINK : (body.detail || JSON.stringify(body)));
+  err.noSession = noSession;
   err.offline = body.error_code === "DAEMON_NOT_RUNNING";
   return err;
 }
-const fail = (prefix, e) => e.offline ? status(e.message, "offline") : status(`${prefix}: ${e.message}`, "error");
+const fail = (prefix, e) => e.offline || e.noSession
+  ? status(e.message, e.offline ? "offline" : "error") : status(`${prefix}: ${e.message}`, "error");
 
 function render(table, headers, rows) {
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -221,7 +254,7 @@ async function loadAgent() {
 }
 
 // A refused or failed request is a plain message in the panel, not the page's status line.
-const agentFail = (prefix, e) => agentMsg(e.offline ? e.message : `${prefix}: ${e.message}`, "error");
+const agentFail = (prefix, e) => agentMsg(e.offline || e.noSession ? e.message : `${prefix}: ${e.message}`, "error");
 
 $("grant").onclick = async () => {
   const operations = [...document.querySelectorAll('input[name="op"]:checked')].map((c) => c.value);
@@ -265,7 +298,7 @@ function onAgentEvent(ev) {
 }
 
 // Live updates: the daemon's events, one JSON object per line, read with fetch because
-// the built-in SSE reader cannot send the token header. When the stream ends the page says so and waits
+// the built-in SSE reader cannot send the session header. When the stream ends the page says so and waits
 // for a click: it never reconnects on its own.
 let lastSeq = null;
 
@@ -304,7 +337,8 @@ async function follow() {
   let reader = null;
   try {
     const q = lastSeq == null ? "" : `?after=${lastSeq}`;
-    const res = await fetch("/api/events" + q, { headers: { "X-Findata-Token": TOKEN } });
+    if (sessionError) throw sessionError;
+    const res = await fetch("/api/events" + q, { credentials: "same-origin", headers: sessionHeaders() });
     if (!res.ok) throw apiError(await res.json());
     reader = res.body.getReader();
     if (lastSeq == null) { await reloadAll(); await loadAgent(); }
@@ -324,6 +358,7 @@ async function follow() {
     }
   } catch (e) {
     if (e.offline) status(e.message, "offline");
+    else if (e.noSession) status(e.message, "error");
     else status(`Live updates stopped: ${e.message}`, "error");
   } finally {
     if (reader) reader.cancel().catch(() => {});
@@ -332,7 +367,7 @@ async function follow() {
 }
 
 $("reconnect").onclick = () => follow();
-follow();
+startSession().then(follow);
 </script>
 </body>
 </html>

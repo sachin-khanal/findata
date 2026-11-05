@@ -37,10 +37,6 @@ class Settings(BaseSettings):
     def master_key_path(self) -> Path:
         return self.data_dir / "master.key"
 
-    @property
-    def api_token_path(self) -> Path:
-        return self.data_dir / "api.token"
-
     def require_plaid_credentials(self) -> None:
         if not self.plaid_client_id or not self.plaid_secret.get_secret_value():
             raise RuntimeError(

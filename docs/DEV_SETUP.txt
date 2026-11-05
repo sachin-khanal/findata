@@ -47,7 +47,6 @@ they are set. Keep FINDATA_HOST on 127.0.0.1; the API is designed for loopback.
 4. LOCAL DATA AND SECRETS (~/.findata)
 --------------------------------------
   findata.db    SQLCipher-encrypted database (also encrypts its -wal/-shm files)
-  api.token     random token required by the local HTTP API
   master.key    master encryption key, ONLY when no OS keychain is available
                 (otherwise the key lives in the OS keychain, one entry per data dir)
 
@@ -89,8 +88,8 @@ arrives as HISTORICAL_UPDATE_COMPLETE. "+0 new" with INITIAL_UPDATE_COMPLETE mea
   uv run findata serve         # web UI + API at http://127.0.0.1:8765
                                # interactive API docs at /docs
 
-Calling the API from a script: send the contents of ~/.findata/api.token in an
-"X-Findata-Token" header. Only /api/health works without it.
+The web API needs a browser session: open the "Open findata: <link>" line that
+`findata serve web` prints (add --open to open it for you). /api/health works without it.
 
 
 6. TESTS AND LINTING

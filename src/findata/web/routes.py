@@ -10,11 +10,12 @@ from collections.abc import AsyncIterator
 from importlib.resources import files
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from findata.client import DaemonClient, DaemonClientError, DaemonRejected
-from findata.web.deps import ClientDep, auth
+from findata.web.deps import OPEN_LINK, ClientDep, auth
+from findata.web.session import COOKIE_NAME
 from findata.wire import (
     AccountOut,
     ExchangeIn,
@@ -37,6 +38,10 @@ class PendingApprovalOut(BaseModel):
     created_at: dt.datetime
 
 
+class LaunchIn(BaseModel):
+    launch: str
+
+
 data = APIRouter(prefix="/api", dependencies=auth)
 
 
@@ -54,24 +59,39 @@ def _start_history(client: DaemonClient, item_id: str) -> None:
 
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
-def index(request: Request, client: ClientDep) -> str:
+def index(client: ClientDep) -> str:
     try:
         status = client.status()
         plaid_env, presence = status.plaid_env, status.user_presence
     except DaemonClientError:
         plaid_env, presence = "", ""  # the page still loads and says the daemon is not running
     html = files("findata.web").joinpath("index.html").read_text()
-    # Same-origin page only; other origins can't read this response (no CORS).
-    return (
-        html.replace("__FINDATA_TOKEN__", request.app.state.api_token)
-        .replace("__PLAID_ENV__", plaid_env)
-        .replace("__USER_PRESENCE__", presence)
-    )
+    # The page carries no credential: a session starts from the launch link's fragment.
+    return html.replace("__PLAID_ENV__", plaid_env).replace("__USER_PRESENCE__", presence)
 
 
 @router.get("/favicon.ico", include_in_schema=False)
 def favicon() -> Response:
     return Response(status_code=204)  # no icon; avoids a 404 in browser consoles
+
+
+@router.post("/api/session")
+def start_session(body: LaunchIn, request: Request) -> Response:
+    """Trade the launch secret for a session: an HttpOnly cookie plus a request key in the body."""
+    pair = request.app.state.sessions.start(body.launch)
+    if pair is None:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error_code": "LAUNCH_LINK_INVALID",
+                "detail": f"The launch link is not valid. {OPEN_LINK}",
+            },
+        )
+    session_id, request_key = pair
+    response = JSONResponse({"request_key": request_key})
+    # No max-age: a browser-session cookie. SameSite=Strict keeps other sites from using it.
+    response.set_cookie(COOKIE_NAME, session_id, httponly=True, samesite="strict", path="/")
+    return response
 
 
 @router.get("/api/health")
