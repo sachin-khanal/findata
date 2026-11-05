@@ -30,3 +30,16 @@ def web() -> None:
         port=s.findata_port,
         timeout_graceful_shutdown=5,  # backstop: open event relays end as shutdown begins
     ).run()
+
+
+@app.command("mcp")
+def mcp() -> None:
+    """Run the MCP server on stdio for an agent (role `mcp`; needs `findata start` running).
+
+    Only MCP protocol goes to stdout; nothing else is printed.
+    """
+    from findata.client import DaemonClient
+    from findata.locations import ClientSettings
+    from findata.mcp.server import build_mcp_server
+
+    build_mcp_server(DaemonClient(ClientSettings().data_dir, "mcp")).run()

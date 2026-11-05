@@ -11,6 +11,7 @@ dependencies = [
     "fastapi>=0.141",
     "httpx2>=2.13",
     "keyring>=25.7.0",
+    "mcp>=2.3.0",
     "plaid-python>=44.0",
     "pydantic-settings>=2.15",
     "pyobjc-framework-localauthentication>=13.0 ; sys_platform == 'darwin'",
