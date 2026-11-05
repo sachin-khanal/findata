@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import logging
@@ -108,19 +109,34 @@ def exchange(body: ExchangeIn, client: ClientDep) -> ItemOut:
 
 
 @data.get("/events")
-async def events(client: ClientDep, after: int | None = Query(None, ge=0)) -> StreamingResponse:
+async def events(
+    request: Request, client: ClientDep, after: int | None = Query(None, ge=0)
+) -> StreamingResponse:
     """The daemon's events as NDJSON, keep-alives included. Opened before the response starts,
     so a down or refusing daemon is an error status; closed when the browser goes away, which
     frees the daemon's stream slot."""
     upstream = await client.aevents(after, keepalives=True)
+    stop = asyncio.ensure_future(request.app.state.stopping.wait())
 
     async def relay() -> AsyncIterator[str]:
+        pending: asyncio.Future | None = None
         try:
-            async for event in upstream:
+            while True:
+                pending = asyncio.ensure_future(anext(upstream))
+                await asyncio.wait({pending, stop}, return_when=asyncio.FIRST_COMPLETED)
+                if not pending.done():
+                    return  # the server is shutting down
+                event = pending.result()
                 yield json.dumps(event, separators=(",", ":")) + "\n"
+        except StopAsyncIteration:
+            return
         except DaemonClientError:
             return  # the daemon went away mid-stream: the page sees the stream end
         finally:
+            stop.cancel()
+            if pending is not None and not pending.done():
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
             await upstream.aclose()
 
     return StreamingResponse(relay(), media_type="application/x-ndjson")

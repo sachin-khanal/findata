@@ -6,9 +6,12 @@ It holds no key, database or Plaid access: everything comes from a `DaemonClient
 
 from __future__ import annotations
 
+import asyncio
+import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -41,6 +44,7 @@ def create_web_app(client: DaemonClient, api_token: str) -> FastAPI:
     )
     app.state.client = client
     app.state.api_token = api_token
+    app.state.stopping = asyncio.Event()  # set as shutdown begins: open event relays end
     # Blocks DNS-rebinding attacks against the localhost server.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
@@ -62,3 +66,16 @@ def create_web_app(client: DaemonClient, api_token: str) -> FastAPI:
 
     app.include_router(routes.router)
     return app
+
+
+class WebServer(uvicorn.Server):
+    """Ends the open /api/events relays as shutdown begins. Uvicorn waits for every open
+    response to finish, and a relay never would."""
+
+    def __init__(self, app: FastAPI, **config: object) -> None:
+        super().__init__(uvicorn.Config(app, **config))
+        self._stopping = app.state.stopping
+
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        self._stopping.set()
+        await super().shutdown(sockets=sockets)

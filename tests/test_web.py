@@ -365,3 +365,62 @@ def test_browser_disconnect_frees_the_daemon_stream_slot(settings, keys, gateway
             # The browser has gone: the relay must close its stream to the daemon.
             _eventually(lambda: len(d.events._streams) == 0, "the daemon-side slot to be freed")
             browser.close()
+
+
+@posix_only
+def test_shutdown_ends_open_event_streams_cleanly(settings, keys, gateway, caplog):
+    import shutil
+    import socket
+    import tempfile
+    import threading
+    import time
+    from pathlib import Path
+
+    from findata.web.app import WebServer
+
+    caplog.set_level("INFO")
+    d = _build(settings, keys, gateway)
+    with serve(d) as daemon_sock:
+        upstream = DaemonClient(
+            d.locations.data_dir,
+            "web",
+            async_http_client=httpx2.AsyncClient(
+                transport=httpx2.AsyncHTTPTransport(uds=str(daemon_sock)), base_url="http://daemon"
+            ),
+        )
+        token = load_or_create_api_token(settings.data_dir / "api.token")
+        folder = Path(tempfile.mkdtemp(dir="/tmp", prefix="fw"))
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(str(folder / "w.sock"))
+        sock.listen()
+        server = WebServer(
+            create_web_app(upstream, token),
+            lifespan="off",
+            log_config=None,
+            access_log=False,
+            timeout_graceful_shutdown=5,
+        )
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)
+        thread.start()
+        browser = httpx2.Client(
+            transport=httpx2.HTTPTransport(uds=str(folder / "w.sock")),
+            base_url="http://127.0.0.1",
+            timeout=10,
+        )
+        try:
+            with browser.stream("GET", "/api/events", headers={TOKEN_HEADER: token}) as r:
+                assert r.status_code == 200
+                _eventually(lambda: len(d.events._streams) == 1, "the daemon-side stream to open")
+                started = time.monotonic()
+                server.should_exit = True  # what Ctrl+C does
+                assert list(r.iter_lines()) == []  # the stream ends by itself
+            thread.join(10)
+            assert not thread.is_alive()
+            assert time.monotonic() - started < 3  # well under the 5 s graceful timeout
+            _eventually(lambda: len(d.events._streams) == 0, "the daemon-side slot to be freed")
+            assert "Exception in ASGI application" not in caplog.text
+            assert "CancelledError" not in caplog.text and "Cancel" not in caplog.text
+        finally:
+            browser.close()
+            sock.close()
+            shutil.rmtree(folder, ignore_errors=True)
