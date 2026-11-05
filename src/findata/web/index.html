@@ -20,6 +20,10 @@
     .env { font-size: 12px; padding: 2px 6px; border-radius: 4px; background: #eee; }
     .env:empty { display: none; }
     #live { color: #555; margin: .5rem 0; }
+    #agent fieldset { border: 1px solid #ddd; margin: .5rem 0; }
+    #agent label { margin-right: 1rem; }
+    #agent-msg[data-state="error"] { color: #8e1b0f; }
+    #agent-confirm { color: #8a6100; }
   </style>
 </head>
 <body>
@@ -28,6 +32,31 @@
   <button id="sync">Sync</button>
   <p id="live" hidden>Disconnected from live updates. <button id="reconnect">Reconnect</button></p>
   <div id="status" role="status" aria-live="polite" data-state="idle">Ready. Link an account to get started.</div>
+  <section id="agent">
+    <h2>Agent access</h2>
+    <p id="grant-now" class="empty">The agent is read-only.</p>
+    <button id="revoke" hidden>Revoke</button>
+    <fieldset>
+      <legend>Let the agent write</legend>
+      <label><input type="checkbox" name="op" value="sync" checked> sync</label>
+      <label><input type="checkbox" name="op" value="link"> link</label>
+      <label><input type="checkbox" name="op" value="items.remove"> items.remove</label>
+      <label>for
+        <select id="grant-ttl">
+          <option value="900" selected>15 minutes</option>
+          <option value="3600">1 hour</option>
+          <option value="14400">4 hours</option>
+          <option value="86400">24 hours</option>
+        </select>
+      </label>
+      <button id="grant">Grant agent writes</button>
+    </fieldset>
+    <p id="agent-confirm" role="status" hidden>Confirm on your Mac (Touch ID or password)…</p>
+    <p id="agent-msg" role="status" aria-live="polite" data-state="idle"></p>
+    <h3>Removal requests</h3>
+    <ul id="requests"></ul>
+    <p id="requests-empty" class="empty">No pending requests.</p>
+  </section>
   <h2>Accounts</h2>
   <table id="accounts"></table>
   <p id="accounts-empty" class="empty" hidden>No accounts yet. Click "Link an account".</p>
@@ -36,6 +65,7 @@
   <p id="txns-empty" class="empty" hidden>No transactions yet. After you link an account, Plaid can take a minute to load it; this page updates by itself when Plaid finishes.</p>
 <script>
 const TOKEN = "__FINDATA_TOKEN__";
+const PRESENCE = "__USER_PRESENCE__";  // touch_id | unsupported | "" (unknown: daemon was down)
 const $ = (id) => document.getElementById(id);
 // state: idle | working | waiting | ok | error. Exposed as data-state so scripts and headless
 // browsers can tell what the page is doing without parsing the message text.
@@ -139,6 +169,94 @@ async function showLinked() {
     (last ? `Last synced ${new Date(last + "Z").toLocaleString()}.` : "Not synced yet: click Sync."), "idle");
 }
 
+// ---- Agent access. Everything here is driven by clicks and daemon events, never a timer. ----
+let agentBusy = false;
+const requests = new Map();  // request_id -> {operation, institution}
+const agentMsg = (msg, state = "idle") => { $("agent-msg").textContent = msg; $("agent-msg").dataset.state = state; };
+const clockTime = (iso) => new Date(/(Z|[+-]\d\d:?\d\d)$/.test(iso) ? iso : iso + "Z").toLocaleTimeString();
+
+function showGrant(grant) {
+  $("grant-now").textContent = grant
+    ? `Agent may ${grant.operations.join(", ")} until ${clockTime(grant.expires_at)}.`
+    : "The agent is read-only.";
+  $("grant-now").classList.toggle("empty", !grant);
+  $("revoke").hidden = !grant;
+}
+
+function showRequests() {
+  const list = $("requests");
+  list.replaceChildren();
+  for (const [id, r] of requests) {
+    const li = document.createElement("li");
+    li.append(`${r.institution || "A linked bank"}: ${r.operation} `);
+    const button = document.createElement("button");
+    button.textContent = "Approve";
+    button.disabled = agentBusy;
+    button.onclick = () => approve(id);
+    li.append(button);
+    list.append(li);
+  }
+  $("requests-empty").hidden = requests.size > 0;
+}
+
+function agentWorking(on, confirming = false) {
+  agentBusy = on;
+  $("grant").disabled = on;
+  $("revoke").disabled = on;
+  $("agent-confirm").hidden = !(on && confirming && PRESENCE !== "unsupported");
+  showRequests();
+}
+
+async function loadAgent() {
+  showGrant(await api("/api/grants"));
+  requests.clear();
+  for (const r of await api("/api/approvals")) requests.set(r.request_id, r);
+  showRequests();
+}
+
+// A refused or failed request is a plain message in the panel, not the page's status line.
+const agentFail = (prefix, e) => agentMsg(e.offline ? e.message : `${prefix}: ${e.message}`, "error");
+
+$("grant").onclick = async () => {
+  const operations = [...document.querySelectorAll('input[name="op"]:checked')].map((c) => c.value);
+  if (!operations.length) { agentMsg("Choose at least one operation.", "error"); return; }
+  agentWorking(true, true);
+  agentMsg("", "idle");
+  try {
+    showGrant(await api("/api/grants", { method: "POST",
+      body: JSON.stringify({ operations, ttl_s: Number($("grant-ttl").value) }) }));
+  } catch (e) { agentFail("Could not grant", e); } finally { agentWorking(false); }
+};
+
+$("revoke").onclick = async () => {
+  agentWorking(true);
+  agentMsg("", "idle");
+  try {
+    await api("/api/grants", { method: "DELETE" });
+    showGrant(null);
+  } catch (e) { agentFail("Could not revoke", e); } finally { agentWorking(false); }
+};
+
+async function approve(id) {
+  agentWorking(true, true);
+  agentMsg("", "idle");
+  try {
+    await api(`/api/approvals/${encodeURIComponent(id)}`, { method: "POST" });
+    requests.delete(id);
+  } catch (e) { agentFail("Could not approve", e); } finally { agentWorking(false); }
+}
+
+function onAgentEvent(ev) {
+  switch (ev.event) {
+    case "grant_created": showGrant(ev); break;
+    case "grant_revoked": case "grant_expired": showGrant(null); break;
+    case "approval_requested":
+      requests.set(ev.request_id, { operation: ev.operation, institution: ev.institution }); showRequests(); break;
+    case "approval_approved": case "approval_expired":
+      requests.delete(ev.request_id); showRequests(); break;
+    case "gap": loadAgent().catch((e) => agentFail("Could not load agent access", e)); break;
+  }
+}
 
 // Live updates: the daemon's events, one JSON object per line, read with fetch because
 // the built-in SSE reader cannot send the token header. When the stream ends the page says so and waits
@@ -154,6 +272,7 @@ const loadFailed = (e) => fail("Could not load data", e);
 
 function onEvent(ev) {
   if (ev.seq != null) lastSeq = ev.seq;
+  onAgentEvent(ev);
   switch (ev.event) {
     case "gap": case "item_linked": case "item_removed":
       (userBusy ? refresh() : reloadAll()).catch(loadFailed); break;
@@ -182,7 +301,7 @@ async function follow() {
     const res = await fetch("/api/events" + q, { headers: { "X-Findata-Token": TOKEN } });
     if (!res.ok) throw apiError(await res.json());
     reader = res.body.getReader();
-    if (lastSeq == null) await reloadAll();
+    if (lastSeq == null) { await reloadAll(); await loadAgent(); }
     const decoder = new TextDecoder();
     let buffer = "";
     for (;;) {

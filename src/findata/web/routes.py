@@ -14,7 +14,15 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from findata.client import DaemonClient, DaemonClientError, DaemonRejected
 from findata.web.deps import ClientDep, auth
-from findata.wire import AccountOut, ExchangeIn, ItemOut, SyncOut, TransactionOut
+from findata.wire import (
+    AccountOut,
+    ExchangeIn,
+    GrantIn,
+    GrantOut,
+    ItemOut,
+    SyncOut,
+    TransactionOut,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -37,13 +45,16 @@ def _start_history(client: DaemonClient, item_id: str) -> None:
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 def index(request: Request, client: ClientDep) -> str:
     try:
-        plaid_env = client.status().plaid_env
+        status = client.status()
+        plaid_env, presence = status.plaid_env, status.user_presence
     except DaemonClientError:
-        plaid_env = ""  # the page still loads and says the daemon is not running
+        plaid_env, presence = "", ""  # the page still loads and says the daemon is not running
     html = files("findata.web").joinpath("index.html").read_text()
     # Same-origin page only; other origins can't read this response (no CORS).
-    return html.replace("__FINDATA_TOKEN__", request.app.state.api_token).replace(
-        "__PLAID_ENV__", plaid_env
+    return (
+        html.replace("__FINDATA_TOKEN__", request.app.state.api_token)
+        .replace("__PLAID_ENV__", plaid_env)
+        .replace("__USER_PRESENCE__", presence)
     )
 
 
@@ -106,6 +117,44 @@ def exchange(body: ExchangeIn, client: ClientDep) -> ItemOut:
     item = client.exchange(body.public_token)
     _start_history(client, item.id)
     return item
+
+
+@data.get("/grants")
+def current_grant(client: ClientDep) -> GrantOut | None:
+    return client.current_grant()
+
+
+@data.post("/grants")
+def create_grant(body: GrantIn, client: ClientDep) -> GrantOut:
+    return client.grant(body.operations, body.ttl_s)  # the daemon asks for Touch ID
+
+
+@data.delete("/grants", status_code=204)
+def revoke_grant(client: ClientDep) -> Response:
+    client.revoke()
+    return Response(status_code=204)
+
+
+@data.get("/approvals")
+def approvals(client: ClientDep) -> list[dict]:
+    """Pending requests, each with the bank's name so the page can say what is being removed."""
+    names = {i.id: i.institution_name for i in client.items()}
+    return [
+        {
+            "request_id": p["request_id"],
+            "operation": p["operation"],
+            "item_id": p["subject"],
+            "institution": names.get(p["subject"]),
+            "created_at": p["created_at"],
+        }
+        for p in client.approvals()
+    ]
+
+
+@data.post("/approvals/{request_id}", status_code=204)
+def approve(request_id: str, client: ClientDep) -> Response:
+    client.approve(request_id)  # the daemon asks for Touch ID
+    return Response(status_code=204)
 
 
 @data.get("/events")

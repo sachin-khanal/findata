@@ -424,3 +424,102 @@ def test_shutdown_ends_open_event_streams_cleanly(settings, keys, gateway, caplo
             browser.close()
             sock.close()
             shutil.rmtree(folder, ignore_errors=True)
+
+
+# ---------- agent-access panel ----------
+
+
+def _with_item(d, keys, item_id="item_1", institution="First Bank"):
+    from tests.test_daemon_events import _add_item
+
+    _add_item(d, keys, item_id, institution=institution)
+
+
+def test_web_grant_round_trip(client, auth, d):
+    assert client.get("/api/grants", headers=auth).json() is None
+    r = client.post("/api/grants", headers=auth, json={"operations": ["sync"], "ttl_s": 900})
+    assert r.status_code == 200 and r.json()["operations"] == ["sync"]
+    assert client.get("/api/grants", headers=auth).json() == r.json()
+    assert "grant_created" in _names(d)
+
+    assert client.delete("/api/grants", headers=auth).status_code == 204
+    assert client.get("/api/grants", headers=auth).json() is None
+    assert "grant_revoked" in _names(d)
+
+
+def test_web_lists_and_approves_pending_removals(client, auth, d, keys):
+    _with_item(d, keys)
+    rid = d.approvals.request("items.remove", "item_1", institution="First Bank")
+    listed = client.get("/api/approvals", headers=auth).json()
+    assert len(listed) == 1
+    assert listed[0]["request_id"] == rid and listed[0]["operation"] == "items.remove"
+    assert listed[0]["institution"] == "First Bank"
+
+    assert client.post(f"/api/approvals/{rid}", headers=auth).status_code == 204
+    assert client.get("/api/approvals", headers=auth).json() == []
+    assert "approval_approved" in _names(d)
+    assert client.post(f"/api/approvals/{rid}", headers=auth).status_code == 404
+
+
+def test_web_grant_requires_the_browser_token(client, d, keys):
+    _with_item(d, keys)
+    rid = d.approvals.request("items.remove", "item_1")
+    body = {"operations": ["sync"], "ttl_s": 900}
+    bad = {TOKEN_HEADER: "wrong"}
+    for headers in ({}, bad):
+        assert client.get("/api/grants", headers=headers).status_code == 401
+        assert client.post("/api/grants", headers=headers, json=body).status_code == 401
+        assert client.delete("/api/grants", headers=headers).status_code == 401
+        assert client.get("/api/approvals", headers=headers).status_code == 401
+        assert client.post(f"/api/approvals/{rid}", headers=headers).status_code == 401
+    assert d.grants.current() is None and len(d.approvals.pending()) == 1
+
+
+def test_web_reports_a_presence_refusal(client, auth, d, keys):
+    from tests.conftest import FakePresence
+
+    _with_item(d, keys)
+    rid = d.approvals.request("items.remove", "item_1")
+    d.app.state.daemon.presence = FakePresence("denied")
+    r = client.post("/api/grants", headers=auth, json={"operations": ["sync"], "ttl_s": 900})
+    assert r.status_code == 403 and r.json()["error_code"] == "USER_PRESENCE_REQUIRED"
+    assert r.json()["detail"]
+    assert d.grants.current() is None
+    r = client.post(f"/api/approvals/{rid}", headers=auth)
+    assert r.status_code == 403 and r.json()["error_code"] == "USER_PRESENCE_REQUIRED"
+    assert len(d.approvals.pending()) == 1
+
+
+def test_index_injects_the_presence_kind(d, settings):
+    from tests.conftest import FakePresence
+
+    app = make_app(d, settings)
+    page = TestClient(app, base_url="http://127.0.0.1")
+    assert 'const PRESENCE = "touch_id"' in page.get("/").text
+    d.app.state.daemon.presence = FakePresence("confirmed", kind="unsupported")
+    assert 'const PRESENCE = "unsupported"' in page.get("/").text
+
+
+def test_panel_updates_from_events(client, auth, d, keys):
+    from importlib.resources import files
+
+    _with_item(d, keys)
+    d.grants.grant({"sync"}, 900)
+    d.approvals.request("items.remove", "item_1", institution="First Bank")
+    d.approvals.approve(d.approvals.pending()[0]["request_id"])
+    d.grants.revoke()
+    d.events.close()
+    r = client.get("/api/events", headers=auth, params={"after": 0})
+    relayed = {json.loads(line)["event"] for line in r.text.splitlines() if line}
+    names = {
+        "grant_created",
+        "grant_revoked",
+        "approval_requested",
+        "approval_approved",
+    }
+    assert names <= relayed
+
+    html = files("findata.web").joinpath("index.html").read_text()
+    for name in names | {"grant_expired", "approval_expired", "gap"}:
+        assert f'case "{name}"' in html, name
+    assert "Confirm on your Mac" in html
