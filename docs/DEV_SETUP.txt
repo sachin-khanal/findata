@@ -37,11 +37,14 @@ directory you run from. .env is git-ignored. Never commit it.
   PLAID_SECRET       from the Plaid dashboard (use the Sandbox secret)
   PLAID_ENV          sandbox (default) or production
   FINDATA_DATA_DIR   optional, default ~/.findata
-  FINDATA_HOST       optional, default 127.0.0.1
-  FINDATA_PORT       optional, default 8765
+  FINDATA_KEY_BACKEND  optional, auto (default), keychain or file (see section 4)
+  FINDATA_HOST       optional, default 127.0.0.1; used by "findata serve web" only
+  FINDATA_PORT       optional, default 8765; used by "findata serve web" only
 
-The server starts without Plaid keys. Routes that need Plaid return 503 until
-they are set. Keep FINDATA_HOST on 127.0.0.1; the API is designed for loopback.
+The daemon starts without Plaid keys. Calls that need Plaid fail until they are
+set. Keep FINDATA_HOST on 127.0.0.1; the web server is designed for loopback.
+Only the daemon reads the Plaid keys. The CLI, "serve web" and "serve mcp" never
+load them.
 
 
 4. LOCAL DATA AND SECRETS (~/.findata)
@@ -49,6 +52,10 @@ they are set. Keep FINDATA_HOST on 127.0.0.1; the API is designed for loopback.
   findata.db    SQLCipher-encrypted database (also encrypts its -wal/-shm files)
   master.key    master encryption key, ONLY when no OS keychain is available
                 (otherwise the key lives in the OS keychain, one entry per data dir)
+  credentials/  one file per role: web.token, cli.token, mcp.token (see section 5)
+  daemon.sock   the daemon's Unix socket (only while it runs)
+  daemon.lock, daemon.pid   one daemon per data directory (only while it runs)
+  daemon.log    output of "findata start --background" (see section 5)
 
 The data directory must be mode 0700 and the files 0600 (POSIX; on Windows the
 per-user profile ACL applies). findata refuses to start if they are accessible to
@@ -68,16 +75,69 @@ To start over with a clean slate, delete the whole directory (or point
 FINDATA_DATA_DIR somewhere else) and run "uv run findata init" again.
 
 
-5. DAILY COMMANDS
------------------
-  uv run findata sandbox-link  # link Plaid's test bank and sync it, no browser; waits until
-                               # Plaid has loaded the full history (usually 10-30 seconds)
-  uv run findata sync          # pull new/changed/removed transactions
-  uv run findata txns          # print recent transactions
+5. PROCESS MODEL AND DAILY COMMANDS
+-----------------------------------
+findata is one daemon plus front ends:
+
+  findata start     the daemon. The only process that holds the master key, opens
+                    the database and talks to Plaid. Serves an API on the Unix
+                    socket ~/.findata/daemon.sock (owner-only, no TCP).
+  findata <cmd>     CLI commands (sync, txns, items, sandbox-link, status, stop,
+                    grant, revoke, approve, audit) are clients of the daemon.
+  findata serve web the web UI on 127.0.0.1:8765, a client of the daemon.
+  findata serve mcp the MCP server on stdio for an agent, a client of the daemon.
+
+Only "init" and "migrate" work without the daemon. Everything else stops with
+DAEMON_NOT_RUNNING when it is not running. Front ends never import the database,
+key or Plaid code; tests/test_boundary.py fails if they do.
+
+Run the daemon and the front ends in separate terminals:
+
+  terminal 1:  uv run findata start            # foreground; Ctrl+C stops it
+  terminal 2:  uv run findata sandbox-link     # link Plaid's test bank and sync it, no
+                                               # browser; waits until history has loaded
+                                               # (usually 10-30 seconds)
+               uv run findata sync             # pull new/changed/removed transactions
+               uv run findata txns             # print recent transactions
+               uv run findata status           # daemon version, Plaid env, uptime
+  terminal 3:  uv run findata serve web        # prints "Open findata: <link>"; open it
+                                               # (--open does that for you)
+  terminal 4:  uv run findata serve mcp        # normally started by an agent host
+
+Background mode:
+  uv run findata start --background   # returns once the daemon is ready
+  uv run findata stop                 # stops it, background or not
+Output of a background daemon is appended to ~/.findata/daemon.log (owner-only).
+Read it when a start fails; the command also prints the last lines. Background
+start is POSIX only (macOS, Linux). Add --wait-timeout <seconds> if the daemon
+takes longer than 30 seconds to become ready.
+
+Credentials. "findata init" (or the first "findata start") creates
+~/.findata/credentials/<role>.token for each role, owner-only (0600). A client
+reads only its own role's file:
+  cli  and web   act for you (human)
+  mcp            the agent: read-only unless you grant it writes
+The daemon checks the role on every route and records every request in the audit
+log ("uv run findata audit"). A leftover api.token file from older versions is
+unused and can be deleted.
+
+Grants and approvals. The agent cannot write until you allow it:
+  uv run findata grant mcp-write --ops sync --for 15m   # --ops: sync, link,
+                                                        # items.remove (comma-separated)
+  uv run findata revoke mcp-write                       # end it now
+  uv run findata approve <id>                           # allow one removal
+Defaults: --ops sync, --for 15m; the longest grant is 24h. Grants expire on their
+own and are cleared when the daemon stops. An agent removal also needs a fresh
+approval each time. The web UI has an "Agent access" panel for the same actions.
+On macOS the daemon asks for Touch ID (or the password) before a grant, an
+approval, or a removal by cli/web; read the prompt. Where there is no such check
+(Linux, Windows) web grants and approvals are refused: use the terminal.
+Design and limits: docs/adr/0004-daemon-centred-architecture.md
 
 Every command explains what it is doing and what to do next. For scripts, CI and
-agents, add --json to sandbox-link, sync or txns: output is one JSON object per
-line ("event": linking, linked, waiting, poll, done, error, ...).
+agents, add --json to sandbox-link, sync, txns or status (and grant, revoke, approve,
+audit, items): output is one JSON object per line ("event": linking, linked,
+waiting, poll, done, error, ...).
 
 sandbox-link exit codes: 0 = history fully loaded, 2 = linked but Plaid was still
 loading when the wait ended (nothing lost; run "findata sync" later, or raise
@@ -85,15 +145,18 @@ loading when the wait ended (nothing lost; run "findata sync" later, or raise
 Plaid reports INITIAL_UPDATE_COMPLETE first, with few or no transactions; the rest
 arrives as HISTORICAL_UPDATE_COMPLETE. "+0 new" with INITIAL_UPDATE_COMPLETE means
 "not ready yet", not "no data".
-  uv run findata serve         # web UI + API at http://127.0.0.1:8765
 
 The web API needs a browser session: open the "Open findata: <link>" line that
-`findata serve web` prints (add --open to open it for you). /api/health works without it.
+"findata serve web" prints. The link carries a one-time-per-run secret in its
+fragment; restarting "serve web" ends all sessions, so open the new link. /api/health
+works without a session.
 
 
 6. TESTS AND LINTING
 --------------------
-  uv run pytest                      # tests use a fake Plaid gateway
+  uv run pytest -q                   # tests use a fake Plaid gateway
+  uv run pytest tests/test_boundary.py tests/test_daemon_e2e.py -v
+                                     # the daemon boundary and the real-socket test
   uv run ruff check .                # lint
   uv run ruff format --check .       # formatting (drop --check to fix)
 
@@ -108,15 +171,27 @@ commands locally before opening a PR.
 
 7. CODE LAYOUT
 --------------
-  src/findata/config.py          settings
-  src/findata/security.py        master key, key derivation, AES-GCM field encryption
+  src/findata/daemon/            the daemon: server.py (findata start), app and routes,
+                                 auth (credentials), grants, presence (Touch ID),
+                                 audit, events, jobs, lock, scheduler
+  src/findata/client/            DaemonClient, the only way front ends reach data
+  src/findata/web/               web front end (app.py, session.py, index.html)
+  src/findata/mcp/server.py      MCP front end
+  src/findata/cli/               "findata" command; commands/ has one file per group
+  src/findata/wire.py            request/response shapes shared by daemon and clients
+  src/findata/locations.py       where files in the data directory live
+  src/findata/config.py          settings (daemon only)
+  src/findata/security/          master key, key derivation, AES-GCM field encryption
   src/findata/db.py              SQLAlchemy models and engine
   src/findata/plaid_gateway.py   the only module that imports plaid-python
   src/findata/sync.py            cursor-based transactions sync
-  src/findata/api.py             FastAPI app (create_app factory)
-  src/findata/cli.py             "findata" command
-  src/findata/web/index.html     minimal web UI
   tests/                         pytest suite (conftest.py has the fake gateway)
+
+Core modules (db, security, plaid_gateway, sync, linking, waiting, queries, schema,
+runtime, contexts, config) are imported only by the daemon, plus init and migrate.
+tests/test_daemon_e2e.py runs a real daemon on a real socket with the fake gateway.
+Tests that bind a Unix socket use a short directory under /tmp: macOS limits socket
+paths to about 104 bytes.
 
 
 7b. KNOWN ISSUE: .venv GETS HIDDEN ON macOS (iCloud/Google Drive Desktop folders)

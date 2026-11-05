@@ -34,6 +34,7 @@ from findata.daemon.lock import DaemonLock
 from findata.daemon.presence import PresenceChecker, default_presence
 from findata.daemon.scheduler import Scheduler
 from findata.locations import Locations
+from findata.plaid_gateway import PlaidGateway
 from findata.privfs import create_private_file, ensure_private_dir
 from findata.readiness import READY_LINE
 from findata.runtime import build_runtime
@@ -216,14 +217,19 @@ def _uvicorn_config(app) -> uvicorn.Config:
 
 
 def run_daemon(
-    settings: Settings, *, presence: PresenceChecker | None = None, ready_fd: int | None = None
+    settings: Settings,
+    *,
+    presence: PresenceChecker | None = None,
+    ready_fd: int | None = None,
+    gateway: PlaidGateway | None = None,
 ) -> None:
     """Run the daemon in the foreground until shutdown (`POST /v1/shutdown`, Ctrl+C, SIGTERM).
 
     `presence` confirms human-authority operations; None (always, outside tests) means this
     platform's real check. `ready_fd` is an inherited pipe write end (`start --background`):
     one `ready` line is written to it once the daemon is serving, and it is closed on every
-    way out, unwritten if the start failed.
+    way out, unwritten if the start failed. `gateway` is a test seam (a fake Plaid gateway); the
+    CLI never sets it.
 
     Raises before serving, with a message for the user: `DaemonAlreadyRunning`,
     `SchemaOutOfDateError`, `DaemonStartError`, or another RuntimeError/OSError (no master
@@ -238,7 +244,7 @@ def run_daemon(
         with DaemonLock(locations.lock, locations.pid):
             try:
                 checker = default_presence() if presence is None else presence
-                _serve(settings, locations, use_tcp, checker, ready)
+                _serve(settings, locations, use_tcp, checker, ready, gateway)
             finally:
                 locations.socket.unlink(missing_ok=True)
                 locations.port_file.unlink(missing_ok=True)
@@ -254,8 +260,9 @@ def _serve(
     use_tcp: bool,
     presence: PresenceChecker,
     ready: ReadySignal | None = None,
+    gateway: PlaidGateway | None = None,
 ) -> None:
-    runtime = build_runtime(settings)  # keys, database, schema check
+    runtime = build_runtime(settings, gateway=gateway)  # keys, database, schema check
     credentials = CredentialStore(locations)
     credentials.ensure_all()
 
