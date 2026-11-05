@@ -149,13 +149,49 @@ def _exit_on_signals(server: uvicorn.Server) -> Iterator[None]:
             signal.signal(sig, handler)
 
 
+class ReadySignal:
+    """The write end of the pipe a `start --background` parent waits on.
+
+    `send` writes exactly one line, `ready`, and closes it; `close` closes it without writing
+    (a failed start), so the parent sees end-of-file instead. Either is safe to repeat.
+    """
+
+    def __init__(self, fd: int) -> None:
+        self._fd: int | None = fd
+
+    def send(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is None:
+            return
+        try:
+            os.write(fd, b"ready\n")
+        finally:
+            os.close(fd)
+
+    def close(self) -> None:
+        fd, self._fd = self._fd, None
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+
 class _DaemonServer(uvicorn.Server):
     """Ends the open event streams as shutdown begins. Uvicorn waits up to
-    GRACEFUL_SHUTDOWN_S for every open response to finish, and a stream never would."""
+    GRACEFUL_SHUTDOWN_S for every open response to finish, and a stream never would.
 
-    def __init__(self, config: uvicorn.Config, events: EventBus) -> None:
+    Tells `ready` once uvicorn has started serving on the bound listener."""
+
+    def __init__(
+        self, config: uvicorn.Config, events: EventBus, ready: ReadySignal | None = None
+    ) -> None:
         super().__init__(config)
         self._events = events
+        self._ready = ready
+
+    async def startup(self, sockets: list[socket.socket] | None = None) -> None:
+        await super().startup(sockets=sockets)
+        if self._ready is not None and not self.should_exit:
+            self._ready.send()  # listening: a client can connect now
 
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
         self._events.close()
@@ -175,32 +211,45 @@ def _uvicorn_config(app) -> uvicorn.Config:
     )
 
 
-def run_daemon(settings: Settings, *, presence: PresenceChecker | None = None) -> None:
+def run_daemon(
+    settings: Settings, *, presence: PresenceChecker | None = None, ready_fd: int | None = None
+) -> None:
     """Run the daemon in the foreground until shutdown (`POST /v1/shutdown`, Ctrl+C, SIGTERM).
 
     `presence` confirms human-authority operations; None (always, outside tests) means this
-    platform's real check.
+    platform's real check. `ready_fd` is an inherited pipe write end (`start --background`):
+    one `ready` line is written to it once the daemon is serving, and it is closed on every
+    way out, unwritten if the start failed.
 
     Raises before serving, with a message for the user: `DaemonAlreadyRunning`,
     `SchemaOutOfDateError`, `DaemonStartError`, or another RuntimeError/OSError (no master
     key, a data directory others can enter).
     """
-    locations = Locations(settings.data_dir)
-    use_tcp = use_tcp_fallback()
-    if not use_tcp:
-        check_socket_path(locations.socket)  # before anything is created
-    with DaemonLock(locations.lock, locations.pid):
-        try:
-            checker = default_presence() if presence is None else presence
-            _serve(settings, locations, use_tcp, checker)
-        finally:
-            locations.socket.unlink(missing_ok=True)
-            locations.port_file.unlink(missing_ok=True)
+    ready = ReadySignal(ready_fd) if ready_fd is not None else None
+    try:
+        locations = Locations(settings.data_dir)
+        use_tcp = use_tcp_fallback()
+        if not use_tcp:
+            check_socket_path(locations.socket)  # before anything is created
+        with DaemonLock(locations.lock, locations.pid):
+            try:
+                checker = default_presence() if presence is None else presence
+                _serve(settings, locations, use_tcp, checker, ready)
+            finally:
+                locations.socket.unlink(missing_ok=True)
+                locations.port_file.unlink(missing_ok=True)
+    finally:
+        if ready is not None:
+            ready.close()
     logger.info("findata daemon stopped.")
 
 
 def _serve(
-    settings: Settings, locations: Locations, use_tcp: bool, presence: PresenceChecker
+    settings: Settings,
+    locations: Locations,
+    use_tcp: bool,
+    presence: PresenceChecker,
+    ready: ReadySignal | None = None,
 ) -> None:
     runtime = build_runtime(settings)  # keys, database, schema check
     credentials = CredentialStore(locations)
@@ -222,7 +271,7 @@ def _serve(
         on_shutdown=request_exit,
         events=events,
     )
-    server = _DaemonServer(_uvicorn_config(app), events)
+    server = _DaemonServer(_uvicorn_config(app), events, ready)
     listener = open_listener(locations, use_tcp=use_tcp)
     scheduler = Scheduler()
     try:
