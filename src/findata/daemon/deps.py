@@ -129,6 +129,14 @@ _PRESENCE_REFUSALS: dict[Presence, str] = {
 }
 
 
+# The page's token can be read by any local process, so the browser may not act without a real
+# check: where the platform has none, the web role is refused (the CLI is not).
+_WEB_UNSUPPORTED = (
+    "This needs a check at the computer, which this platform does not have yet. Use "
+    "`findata grant mcp-write` or `findata approve <id>` in a terminal instead."
+)
+
+
 def presence_gate(request: Request, role: RoleDep, state: StateDep) -> Callable[[str], None]:
     """The user-presence check for an operation that carries human authority.
 
@@ -146,6 +154,8 @@ def presence_gate(request: Request, role: RoleDep, state: StateDep) -> Callable[
         facts: RequestAudit | None = request.scope.get(SCOPE_KEY)
         if facts is not None:
             facts.presence = outcome
+        if outcome == "unsupported" and role == "web":
+            raise DaemonError(403, "USER_PRESENCE_REQUIRED", _WEB_UNSUPPORTED)
         if outcome not in ("confirmed", "unsupported"):  # anything else is a refusal
             detail = _PRESENCE_REFUSALS.get(outcome, _PRESENCE_REFUSALS["denied"])
             raise DaemonError(403, "USER_PRESENCE_REQUIRED", detail)

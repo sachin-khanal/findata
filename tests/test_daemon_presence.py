@@ -253,20 +253,44 @@ def test_unsupported_platform_allows_and_audits_presence_unsupported(settings, k
     assert r.status_code == 200, r.text
     r = d.client.delete("/v1/items/item_1", headers=d.as_["mcp"])
     rid = _error(r, 403, "CONFIRMATION_REQUIRED")["request_id"]
-    assert d.client.post(f"/v1/approvals/{rid}", headers=d.as_["web"]).status_code == 204
+    assert d.client.post(f"/v1/approvals/{rid}", headers=d.as_["cli"]).status_code == 204
     r = d.client.delete("/v1/items/item_1", headers=d.as_["mcp"], params={"request_id": rid})
     assert r.status_code == 204, r.text
     _link_and_sync(d)
     assert d.client.delete("/v1/items/item_1", headers=d.as_["cli"]).status_code == 204
     assert [(role, s, o) for role, _, s, o in _gated_rows(d)] == [
         ("cli", "DELETE /v1/items/{item_id} presence=unsupported", "ok"),
-        ("web", "POST /v1/approvals/{request_id} presence=unsupported", "ok"),
+        ("cli", "POST /v1/approvals/{request_id} presence=unsupported", "ok"),
         ("cli", "POST /v1/grants presence=unsupported", "ok"),
     ]
     agent = [r["summary"] for r in _audit(d) if r["role"] == "mcp" and r["outcome"] == "ok"]
     assert agent == ["DELETE /v1/items/{item_id} query=[request_id]"]  # never asked
     status = d.client.get("/v1/status", headers=d.as_["mcp"]).json()
     assert status["user_presence"] == "unsupported"
+
+
+def test_unsupported_platform_refuses_the_web_role(settings, keys, gateway):
+    d = _build(settings, keys, gateway, presence=UnsupportedPresence())
+    _link_and_sync(d)
+    web = d.as_["web"]
+    r = d.client.post("/v1/grants", headers=web, json={"operations": ["sync"], "ttl_s": 60})
+    assert "findata grant" in _error(r, 403, "USER_PRESENCE_REQUIRED")["detail"]
+    assert d.grants.current() is None
+    d.grants.grant({"items.remove"}, 60)
+    rid = _error(
+        d.client.delete("/v1/items/item_1", headers=d.as_["mcp"]), 403, "CONFIRMATION_REQUIRED"
+    )["request_id"]
+    _error(d.client.post(f"/v1/approvals/{rid}", headers=web), 403, "USER_PRESENCE_REQUIRED")
+    assert [p["request_id"] for p in d.approvals.pending()] == [rid]
+    _error(d.client.delete("/v1/items/item_1", headers=web), 403, "USER_PRESENCE_REQUIRED")
+    assert len(d.client.get("/v1/items", headers=web).json()) == 1
+    assert d.gateway.removed_tokens == []
+    rows = _gated_rows(d)
+    assert len(rows) == 3 and all(
+        r[0] == "web" and r[2].endswith(" presence=unsupported") and r[3] == "denied" for r in rows
+    )
+    # the CLI is still allowed
+    assert d.client.post(f"/v1/approvals/{rid}", headers=d.as_["cli"]).status_code == 204
 
 
 # ---------- ordering and content of the prompt ----------

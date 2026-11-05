@@ -523,3 +523,65 @@ def test_panel_updates_from_events(client, auth, d, keys):
     for name in names | {"grant_expired", "approval_expired", "gap"}:
         assert f'case "{name}"' in html, name
     assert "Confirm on your Mac" in html
+    assert 'case "gap": loadAgent()' in html  # the panel's own re-read on a gap
+
+
+def test_panel_relays_expiry_events(client, auth, d, keys):
+    _with_item(d, keys)
+    d.grants.grant({"sync"}, 900)
+    d.approvals.request("items.remove", "item_1")
+    for timer in d.timers.started:
+        timer.fire()  # the grant and the request both reach their expiry instant
+    d.events.close()
+    r = client.get("/api/events", headers=auth, params={"after": 0})
+    relayed = {json.loads(line)["event"] for line in r.text.splitlines() if line}
+    assert {"grant_expired", "approval_expired"} <= relayed
+
+
+def test_page_reads_a_204_as_success():
+    from importlib.resources import files
+
+    html = files("findata.web").joinpath("index.html").read_text()
+    assert "res.status === 204" in html
+    assert html.index("res.status === 204") < html.index("await res.json()")
+
+
+def test_panel_starts_neutral_and_shows_the_date_of_a_later_expiry():
+    from importlib.resources import files
+
+    html = files("findata.web").joinpath("index.html").read_text()
+    assert 'id="grant-now" class="empty">Loading' in html
+    assert 'id="requests-empty" class="empty" hidden' in html
+    assert "toDateString()" in html  # a grant ending on another day shows its date
+
+
+def test_web_down_panel_routes_and_page(settings, auth, d):
+    down = TestClient(
+        make_app(d, settings, DownClient(settings.data_dir)),
+        base_url="http://127.0.0.1",
+    )
+    assert 'const PRESENCE = ""' in down.get("/").text
+    body = {"operations": ["sync"], "ttl_s": 900}
+    for r in (
+        down.get("/api/grants", headers=auth),
+        down.post("/api/grants", headers=auth, json=body),
+        down.delete("/api/grants", headers=auth),
+        down.get("/api/approvals", headers=auth),
+        down.post("/api/approvals/x", headers=auth),
+    ):
+        assert r.status_code == 503 and r.json()["error_code"] == "DAEMON_NOT_RUNNING"
+
+
+def test_web_is_refused_where_the_platform_has_no_presence_check(client, auth, d, keys):
+    from tests.conftest import FakePresence
+
+    _with_item(d, keys)
+    rid = d.approvals.request("items.remove", "item_1")
+    d.app.state.daemon.presence = FakePresence("unsupported", kind="unsupported")
+    r = client.post("/api/grants", headers=auth, json={"operations": ["sync"], "ttl_s": 900})
+    assert r.status_code == 403 and r.json()["error_code"] == "USER_PRESENCE_REQUIRED"
+    assert "findata grant" in r.json()["detail"]
+    assert d.grants.current() is None
+    r = client.post(f"/api/approvals/{rid}", headers=auth)
+    assert r.status_code == 403 and r.json()["error_code"] == "USER_PRESENCE_REQUIRED"
+    assert len(d.approvals.pending()) == 1

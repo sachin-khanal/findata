@@ -11,6 +11,7 @@ from importlib.resources import files
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from pydantic import BaseModel
 
 from findata.client import DaemonClient, DaemonClientError, DaemonRejected
 from findata.web.deps import ClientDep, auth
@@ -26,6 +27,16 @@ from findata.wire import (
 
 log = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class PendingApprovalOut(BaseModel):
+    request_id: str
+    operation: str
+    item_id: str
+    institution: str | None
+    created_at: dt.datetime
+
+
 data = APIRouter(prefix="/api", dependencies=auth)
 
 
@@ -136,17 +147,16 @@ def revoke_grant(client: ClientDep) -> Response:
 
 
 @data.get("/approvals")
-def approvals(client: ClientDep) -> list[dict]:
-    """Pending requests, each with the bank's name so the page can say what is being removed."""
-    names = {i.id: i.institution_name for i in client.items()}
+def approvals(client: ClientDep) -> list[PendingApprovalOut]:
+    """Pending requests; the bank's name lets the page say what is being removed."""
     return [
-        {
-            "request_id": p["request_id"],
-            "operation": p["operation"],
-            "item_id": p["subject"],
-            "institution": names.get(p["subject"]),
-            "created_at": p["created_at"],
-        }
+        PendingApprovalOut(
+            request_id=p["request_id"],
+            operation=p["operation"],
+            item_id=p["subject"],
+            institution=p.get("institution"),
+            created_at=p["created_at"],
+        )
         for p in client.approvals()
     ]
 

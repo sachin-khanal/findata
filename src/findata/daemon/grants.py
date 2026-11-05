@@ -186,6 +186,7 @@ class ApprovalStore:
                     "request_id": rid,
                     "operation": v["operation"],
                     "subject": v["subject"],
+                    "institution": v["institution"],
                     "created_at": v["created_at"],
                 }
                 for rid, v in self._requests.items()

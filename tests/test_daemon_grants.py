@@ -120,6 +120,6 @@ def test_pending_lists_unapproved_unexpired_only():
     approvals.approve(b)
     pending = approvals.pending()
     assert [p["request_id"] for p in pending] == [a]
-    assert set(pending[0]) == {"request_id", "operation", "subject", "created_at"}
+    assert set(pending[0]) == {"request_id", "operation", "subject", "institution", "created_at"}
     clock.advance(300)
     assert approvals.pending() == []

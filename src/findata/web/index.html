@@ -34,7 +34,7 @@
   <div id="status" role="status" aria-live="polite" data-state="idle">Ready. Link an account to get started.</div>
   <section id="agent">
     <h2>Agent access</h2>
-    <p id="grant-now" class="empty">The agent is read-only.</p>
+    <p id="grant-now" class="empty">Loading…</p>
     <button id="revoke" hidden>Revoke</button>
     <fieldset>
       <legend>Let the agent write</legend>
@@ -55,7 +55,7 @@
     <p id="agent-msg" role="status" aria-live="polite" data-state="idle"></p>
     <h3>Removal requests</h3>
     <ul id="requests"></ul>
-    <p id="requests-empty" class="empty">No pending requests.</p>
+    <p id="requests-empty" class="empty" hidden>No pending requests.</p>
   </section>
   <h2>Accounts</h2>
   <table id="accounts"></table>
@@ -85,6 +85,7 @@ async function api(path, opts = {}) {
     ...opts,
     headers: { "Content-Type": "application/json", "X-Findata-Token": TOKEN, ...(opts.headers || {}) },
   });
+  if (res.status === 204) return null;  // success with no body (Revoke, Approve)
   const body = await res.json();
   if (!res.ok) throw apiError(body);
   return body;
@@ -170,10 +171,14 @@ async function showLinked() {
 }
 
 // ---- Agent access. Everything here is driven by clicks and daemon events, never a timer. ----
-let agentBusy = false;
+let agentBusy = false, agentLoaded = false;  // until loaded, say nothing about the state
 const requests = new Map();  // request_id -> {operation, institution}
 const agentMsg = (msg, state = "idle") => { $("agent-msg").textContent = msg; $("agent-msg").dataset.state = state; };
-const clockTime = (iso) => new Date(/(Z|[+-]\d\d:?\d\d)$/.test(iso) ? iso : iso + "Z").toLocaleTimeString();
+// A clock time, with the date too when it is not today (a 24 hour grant ends tomorrow).
+const clockTime = (iso) => {
+  const t = new Date(/(Z|[+-]\d\d:?\d\d)$/.test(iso) ? iso : iso + "Z");
+  return t.toDateString() === new Date().toDateString() ? t.toLocaleTimeString() : t.toLocaleString();
+};
 
 function showGrant(grant) {
   $("grant-now").textContent = grant
@@ -196,7 +201,7 @@ function showRequests() {
     li.append(button);
     list.append(li);
   }
-  $("requests-empty").hidden = requests.size > 0;
+  $("requests-empty").hidden = !agentLoaded || requests.size > 0;
 }
 
 function agentWorking(on, confirming = false) {
@@ -211,6 +216,7 @@ async function loadAgent() {
   showGrant(await api("/api/grants"));
   requests.clear();
   for (const r of await api("/api/approvals")) requests.set(r.request_id, r);
+  agentLoaded = true;
   showRequests();
 }
 
