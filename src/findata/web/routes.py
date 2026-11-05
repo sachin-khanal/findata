@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from findata.client import DaemonClient, DaemonClientError, DaemonRejected
 from findata.web.deps import OPEN_LINK, ClientDep, auth
-from findata.web.session import COOKIE_NAME
+from findata.web.session import WebSessions
 from findata.wire import (
     AccountOut,
     ExchangeIn,
@@ -89,8 +89,7 @@ def start_session(body: LaunchIn, request: Request) -> Response:
         )
     session_id, request_key = pair
     response = JSONResponse({"request_key": request_key})
-    # No max-age: a browser-session cookie. SameSite=Strict keeps other sites from using it.
-    response.set_cookie(COOKIE_NAME, session_id, httponly=True, samesite="strict", path="/")
+    WebSessions.set_cookie(response, session_id)
     return response
 
 

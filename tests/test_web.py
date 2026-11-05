@@ -85,10 +85,15 @@ def make_app(d, settings, client=None):
     return create_web_app(client or web_client(d), WebSessions())
 
 
+def launch_secret(app) -> str:
+    """The secret in the launch link, as a user would read it from the printed line."""
+    return app.state.sessions.launch_url("127.0.0.1", 8765).split("#launch=")[1]
+
+
 def login(browser) -> dict[str, str]:
     """Start a session the way the page does (POST the launch secret). The browser object keeps
     the cookie; the returned header is the per-session request key the page keeps in storage."""
-    secret = browser.app.state.sessions.launch_secret
+    secret = launch_secret(browser.app)
     r = browser.post("/api/session", json={"launch": secret})
     assert r.status_code == 200
     return {KEY_HEADER: r.json()["request_key"]}
@@ -333,7 +338,9 @@ def test_web_events_relays_daemon_events_and_needs_a_session(client, auth, d):
 
 def test_served_page_is_one_page(client):
     html = client.get("/").text
-    assert html.count("<script>") == 1 and html.count("<script") == 2  # inline + Plaid's
+    assert (
+        html.count("<script>") == 1 and html.count("<script") == 1
+    )  # Plaid's script loads on click, not here
     assert html.count('id="status"') == 1 and html.count("const PRESENCE") == 1
     assert html.count("</html>") == 1 and html.rstrip().endswith("</html>")
 
@@ -365,9 +372,7 @@ def test_browser_disconnect_frees_the_daemon_stream_slot(settings, keys, gateway
                 base_url="http://127.0.0.1",
                 timeout=5,
             )
-            key = browser.post(
-                "/api/session", json={"launch": web.app.state.sessions.launch_secret}
-            )
+            key = browser.post("/api/session", json={"launch": launch_secret(web.app)})
             with browser.stream(
                 "GET", "/api/events", headers={KEY_HEADER: key.json()["request_key"]}
             ) as r:
@@ -422,7 +427,7 @@ def test_shutdown_ends_open_event_streams_cleanly(settings, keys, gateway, caplo
             timeout=10,
         )
         try:
-            key = browser.post("/api/session", json={"launch": app.state.sessions.launch_secret})
+            key = browser.post("/api/session", json={"launch": launch_secret(app)})
             with browser.stream(
                 "GET", "/api/events", headers={KEY_HEADER: key.json()["request_key"]}
             ) as r:

@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>findata</title>
-  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
   <style>
     body { font: 15px/1.5 system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; }
     button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; cursor: pointer; }
@@ -70,29 +69,36 @@
 // the cookie alone is refused, because cookies for 127.0.0.1 reach every port.
 const KEY_STORE = "findata.session_key";
 const OPEN_LINK = "Open the link printed by `findata serve web`.";
-let sessionKey = null;
-try { sessionKey = localStorage.getItem(KEY_STORE); } catch (e) { /* storage blocked: no session */ }
-function setSessionKey(key) {
-  sessionKey = key;
-  try { key ? localStorage.setItem(KEY_STORE, key) : localStorage.removeItem(KEY_STORE); } catch (e) { /* ignore */ }
+// The key is read from storage on every request, never cached: another tab may have started a
+// newer session, and this tab must use it rather than overwrite or delete it.
+const storedKey = () => { try { return localStorage.getItem(KEY_STORE); } catch (e) { return null; } };
+function storeKey(key) { try { localStorage.setItem(KEY_STORE, key); } catch (e) { /* storage blocked */ } }
+// A refused key is removed only if it is still the stored one: a newer key must survive.
+function dropKey(sent) {
+  try { if (sent && localStorage.getItem(KEY_STORE) === sent) localStorage.removeItem(KEY_STORE); } catch (e) { /* ignore */ }
 }
-const sessionHeaders = () => (sessionKey ? { "X-Findata-Session": sessionKey } : {});
+const sessionHeaders = (key) => (key ? { "X-Findata-Session": key } : {});
+let sessionError = null;
 
+// Start a session from a #launch=... fragment. The fragment is removed from the address bar
+// whenever it has that form, before anything else, even if the value turns out to be malformed.
 async function startSession() {
-  const m = /^#launch=([A-Za-z0-9_-]+)$/.exec(location.hash);
-  if (!m) return;
+  sessionError = null;
+  if (!location.hash.startsWith("#launch=")) return;
+  const secret = location.hash.slice("#launch=".length);
   history.replaceState(null, "", "/");  // the secret leaves the address bar and the history
   try {
+    if (!/^[A-Za-z0-9_-]+$/.test(secret)) throw apiError({ error_code: "LAUNCH_LINK_INVALID" });
     const res = await fetch("/api/session", {
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ launch: m[1] }),
+      body: JSON.stringify({ launch: secret }),
     });
     const body = JSON.parse(await res.text());
-    if (res.ok) setSessionKey(body.request_key); else { setSessionKey(null); throw apiError(body); }
-  } catch (e) { setSessionKey(null); sessionError = e; }
+    if (!res.ok) throw apiError(body);
+    storeKey(body.request_key);
+  } catch (e) { sessionError = e; }  // a failed launch never deletes a stored key
 }
-let sessionError = null;
 const PRESENCE = "__USER_PRESENCE__";  // touch_id | unsupported | "" (unknown: daemon was down)
 const $ = (id) => document.getElementById(id);
 // state: idle | working | waiting | ok | error. Exposed as data-state so scripts and headless
@@ -109,21 +115,22 @@ const historyStatus = (state) => state === "done"
   ? status("History loaded.", "ok") : status(`History job ${state}.`, "error");
 
 async function api(path, opts = {}) {
+  const sent = storedKey();
   const res = await fetch(path, {
     ...opts,
     credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...sessionHeaders(), ...(opts.headers || {}) },
+    headers: { "Content-Type": "application/json", ...sessionHeaders(sent), ...(opts.headers || {}) },
   });
   if (res.status === 204) return null;  // success with no body (Revoke, Approve)
   const body = await res.json();
-  if (!res.ok) throw apiError(body);
+  if (!res.ok) throw apiError(body, sent);
   return body;
 }
 
 // A stopped daemon is a state, not a failure of this page: say what to run.
-function apiError(body) {
+function apiError(body, sentKey = null) {
   const noSession = body.error_code === "NO_BROWSER_SESSION" || body.error_code === "LAUNCH_LINK_INVALID";
-  if (noSession) setSessionKey(null);  // a stale key is worth nothing: no retry, ask for the link
+  if (noSession) dropKey(sentKey);  // a stale key is worth nothing: no retry, ask for the link
   const err = new Error(noSession ? OPEN_LINK : (body.detail || JSON.stringify(body)));
   err.noSession = noSession;
   err.offline = body.error_code === "DAEMON_NOT_RUNNING";
@@ -172,9 +179,25 @@ async function sync() {
   } finally { busy(false); }
 }
 
+// Plaid's script is third-party code: it is loaded only when the user clicks Link, never at
+// page load, so it cannot see the launch secret and does not run at all unless they link.
+let plaidLoading = null;
+function loadPlaid() {
+  if (window.Plaid) return Promise.resolve();
+  plaidLoading = plaidLoading || new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+    s.onload = resolve;
+    s.onerror = () => { plaidLoading = null; s.remove(); reject(new Error("Plaid's script did not load")); };
+    document.head.appendChild(s);
+  });
+  return plaidLoading;
+}
+
 $("link").onclick = async () => {
   try {
     status("Opening Plaid Link…", "working");
+    await loadPlaid();
     const { link_token } = await api("/api/link/token", { method: "POST" });
     Plaid.create({
       token: link_token,
@@ -254,6 +277,15 @@ async function loadAgent() {
 }
 
 // A refused or failed request is a plain message in the panel, not the page's status line.
+// After a refused session the panel says so too, instead of staying at "Loading…".
+function sessionRefused(e) {
+  status(e.message, "error");
+  $("grant-now").textContent = e.message;
+  $("grant-now").classList.add("empty");
+  $("grant").disabled = true;
+  $("revoke").hidden = true;
+}
+
 const agentFail = (prefix, e) => agentMsg(e.offline || e.noSession ? e.message : `${prefix}: ${e.message}`, "error");
 
 $("grant").onclick = async () => {
@@ -300,7 +332,7 @@ function onAgentEvent(ev) {
 // Live updates: the daemon's events, one JSON object per line, read with fetch because
 // the built-in SSE reader cannot send the session header. When the stream ends the page says so and waits
 // for a click: it never reconnects on its own.
-let lastSeq = null;
+let lastSeq = null, following = false;
 
 async function reloadAll() {
   await refresh();
@@ -337,10 +369,12 @@ async function follow() {
   let reader = null;
   try {
     const q = lastSeq == null ? "" : `?after=${lastSeq}`;
-    if (sessionError) throw sessionError;
-    const res = await fetch("/api/events" + q, { credentials: "same-origin", headers: sessionHeaders() });
-    if (!res.ok) throw apiError(await res.json());
+    const sent = storedKey();
+    const res = await fetch("/api/events" + q, { credentials: "same-origin", headers: sessionHeaders(sent) });
+    if (!res.ok) throw apiError(await res.json(), sent);
     reader = res.body.getReader();
+    following = true;
+    agentWorking(false);  // undo sessionRefused() once a session works
     if (lastSeq == null) { await reloadAll(); await loadAgent(); }
     const decoder = new TextDecoder();
     let buffer = "";
@@ -358,16 +392,30 @@ async function follow() {
     }
   } catch (e) {
     if (e.offline) status(e.message, "offline");
-    else if (e.noSession) status(e.message, "error");
+    else if (e.noSession) sessionRefused(e);
     else status(`Live updates stopped: ${e.message}`, "error");
   } finally {
+    following = false;
     if (reader) reader.cancel().catch(() => {});
   }
   $("live").hidden = false;
 }
 
 $("reconnect").onclick = () => follow();
-startSession().then(follow);
+const begin = async () => {
+  await startSession();
+  if (sessionError) sessionRefused(sessionError); else follow();
+};
+// Pasting a new launch link into this tab is only a fragment change: no reload, so start the
+// session here. If the stream is already live the page keeps it; otherwise it loads afresh.
+window.addEventListener("hashchange", () => {
+  if (!location.hash.startsWith("#launch=")) return;
+  if (!following) lastSeq = null;
+  startSession().then(() => {
+    if (sessionError) sessionRefused(sessionError); else if (!following) follow();
+  });
+});
+begin();
 </script>
 </body>
 </html>

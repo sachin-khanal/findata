@@ -1,4 +1,4 @@
-"""Owner-only files and directories, secret files, and the local API token.
+"""Owner-only files and directories, and secret files.
 
 Deliberately crypto-free (stdlib only) so front ends can import it without the key stack.
 """

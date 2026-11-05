@@ -14,7 +14,7 @@ Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you if ne
 ```bash
 uv sync
 cp .env.example .env         # add PLAID_CLIENT_ID and PLAID_SECRET (Sandbox)
-uv run findata init          # creates ~/.findata (key, API token, DB), all owner-only
+uv run findata init          # creates ~/.findata (key, DB), all owner-only
 uv run findata migrate       # after pulling updates: bring the DB schema up to date
 uv run findata sandbox-link  # links First Platypus Bank test data, no browser needed
 uv run findata txns          # print recent transactions
@@ -58,8 +58,6 @@ Plaid ──/transactions/sync──▶ sync.py ──▶ SQLite (~/.findata/fin
 | POST | `/api/sync` | sync all Items |
 | GET | `/api/items`, `/api/accounts` | |
 | GET | `/api/transactions` | `start`, `end`, `account_id`, `category`, `limit`, `offset` |
-
-Interactive docs: <http://127.0.0.1:8765/docs>.
 
 ## Development
 

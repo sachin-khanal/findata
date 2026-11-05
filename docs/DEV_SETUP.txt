@@ -86,7 +86,6 @@ Plaid reports INITIAL_UPDATE_COMPLETE first, with few or no transactions; the re
 arrives as HISTORICAL_UPDATE_COMPLETE. "+0 new" with INITIAL_UPDATE_COMPLETE means
 "not ready yet", not "no data".
   uv run findata serve         # web UI + API at http://127.0.0.1:8765
-                               # interactive API docs at /docs
 
 The web API needs a browser session: open the "Open findata: <link>" line that
 `findata serve web` prints (add --open to open it for you). /api/health works without it.

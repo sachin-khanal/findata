@@ -12,7 +12,7 @@ Encryption is layered, all derived from one random 256-bit master key:
 All primitives come from `cryptography` and SQLCipher; nothing here implements a cipher.
 
 Submodules, one concern each: `files` (owner-only files), `cipher` (AES-GCM), `keys` (HKDF),
-`keychain` (OS keychain), `masterkey` (find/create the master key), `token` (API token).
+`keychain` (OS keychain), `masterkey` (find/create the master key).
 """
 
 from findata.security.cipher import FieldCipher
