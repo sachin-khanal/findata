@@ -107,22 +107,101 @@ stopped).
 - Writes by the mcp role (sync, link, remove, and any later write) are off until a human
   turns them on. The agent can ask for access but can never grant it to itself: the grant is
   made through a human channel the agent has no credential for.
-- *(My guess at the mechanism, to confirm: the user runs `findata grant mcp-write` in a
-  terminal, or approves a pending request in the web UI. The grant is time-limited, defaults
-  to a short window, names the operations it covers, and can be revoked with
-  `findata revoke mcp-write`. Item removal additionally needs a fresh confirmation each
-  time.)*
+- *(Decided by the user, 2026-11-04.)* The user runs `findata grant mcp-write` in a terminal
+  (or uses the web UI). The grant is time-limited, defaults to a short window, names the
+  operations it covers, and can be revoked with `findata revoke mcp-write`. Item removal
+  additionally needs a fresh approval each time (`findata approve <id>` or the web UI).
 - The daemon stores grants, checks them on every write, lets them expire on their own, and
   clears them when it stops. Granting, using and revoking are all written to the audit log.
 - An agent write attempt without a grant fails with a specific error that tells the agent a
   human must authorize it. Nothing is queued or retried silently.
+
+### User presence for human-authority operations (decided by the user, 2026-11-04)
+
+Role credentials alone do not stop an agent that can run shell commands as the user: it can
+read the `cli` credential file, or run `findata grant` and `findata items rm` itself. On macOS
+(the first platform), the daemon therefore asks for the user's presence (Touch ID, or the
+login password when Touch ID is unavailable) before it acts on the operations that carry human
+authority, and the limits of that protection are documented.
+
+- **Checked by the daemon, not the front end,** so calling the socket directly with the `cli`
+  or `web` credential still brings up the prompt on the Mac.
+- **Which operations** *(builder's call, change if wanted):* creating a grant, approving a
+  pending agent request, and removing an Item as `cli` or `web`. Not reads, sync, link,
+  revoke, status or stop: revoking only ever reduces access, and the rest do not widen the
+  agent's access or destroy anything. An agent's own removal needs no prompt because the
+  approval it consumes was already confirmed in person.
+- **The prompt says what is being approved,** for example "allow the findata agent to sync and
+  remove items for 15 minutes" or "remove First Platypus Bank and its local data". It never
+  contains secrets or transaction data.
+- **A cancelled, failed or timed-out prompt refuses the operation** with
+  `USER_PRESENCE_REQUIRED` and changes nothing. The outcome of every check is audited.
+- **Where no prompt is possible** *(builder's call):* on macOS without a login session that can
+  show one (for example over SSH) the operation is refused with a message saying so. On Linux
+  and Windows, which have no equivalent here yet, the operations are allowed and the daemon
+  reports and audits presence as unsupported.
+- **Residual limits, documented in ADR 0004 and the README:** this stops an agent from using
+  the CLI or the socket to act with human authority. It does not stop a process that can
+  change findata's code, stop the daemon and run its own, or read the user's keychain. Agents
+  that must not be trusted that far need to run sandboxed, without access to `~/.findata` or
+  the findata source.
+
+### Events, not polling (decided by the user, 2026-11-04)
+
+The user's goal: as efficient and light on resources as possible, so findata's processes do
+not poll each other.
+
+- Long operations and state changes are pushed by the daemon as events. A client holds one
+  streaming request open and reacts to each event as it arrives; it never re-asks on a timer.
+- The daemon streams newline-delimited JSON, one event per line, over the existing socket API:
+  `GET /v1/events` for daemon-wide events and `GET /v1/jobs/{id}/events` for one job. An idle
+  stream carries only an occasional keep-alive line, so a client that went away is noticed,
+  and it holds no thread while idle.
+- The CLI prints a job's events as they arrive (the same `--json` lines as today). The web
+  server relays the daemon's events to the page over one streaming request that carries the
+  browser token, so the page updates when a sync finishes, a grant changes or the agent asks
+  for approval.
+- Waits inside the daemon block until something happens (a grant's expiry is a timer, a job's
+  end is a signal); nothing sleeps in a loop to check.
+- `start --background` learns that the daemon is ready from the daemon itself (a pipe the child
+  writes to once it is listening), not by probing it.
+- **What still polls, and why:** after a bank is linked, the daemon re-syncs with Plaid on a
+  bounded schedule until its history has loaded (every 5 s for up to 2 minutes by default).
+  Plaid only pushes through webhooks, which need a public HTTPS endpoint, and the daemon has
+  none by design. Removing this poll needs a webhook relay: a separate decision, because it
+  sends Item metadata to a second party.
+
 ### Web front end (`findata serve web`)
 
-- Serves the existing UI on 127.0.0.1:8765 and keeps the existing browser protections (token
-  header, Host allow-list, no CORS).
+- Serves the existing UI on 127.0.0.1:8765 with a Host allow-list and no CORS; how the browser
+  gets a session is in "Browser access" below (the token in the page was retired on 2026-11-05).
 - Its backend is a thin layer that calls the daemon through a typed client. It holds no keys,
   no database and no Plaid credentials.
 - Plaid Link still runs in the browser; the link token and exchange go through the daemon.
+
+### Browser access (decided by the user, 2026-11-05)
+
+The web server listens on 127.0.0.1, which every local process and every other account on the
+machine can reach. A page that carries its own credential hands that credential to anyone who
+asks for `/`, so the page carries none.
+
+- `findata serve web` prints a launch link once it is listening, and `--open` opens it in the
+  default browser. The link carries a secret in its fragment (`http://127.0.0.1:8765/#launch=…`),
+  so the secret is never sent in a request line, never written to an access log, and is removed
+  from the address bar and history as soon as the page has used it.
+- The page sends the secret once to the web server, which answers with a session cookie that is
+  HttpOnly and SameSite=Strict, and with the session's key in the response body.
+- Every data route needs that cookie and a second per-session key that the page keeps in its own
+  storage and sends as a request header. Browsers send cookies for 127.0.0.1 to every port, so
+  another local web server could receive the cookie; page storage is kept apart per port, so it
+  never gets the key, and scripts on the page (Plaid's included) never see the cookie. Neither
+  half works alone. A cross-site page cannot send the header without a CORS preflight, which
+  the server never approves. The Host allow-list stays.
+- The secrets exist only in the web server's memory for one run: never on disk, never in logs.
+  Restarting `serve web` ends every browser session; the page then says to open the new link.
+- Without a session, `/` shows a page that holds no credential and no data and says to open the
+  link printed by `findata serve web`.
+- The old persistent browser token (`api.token`, the `X-Findata-Token` header) is retired.
 
 ### MCP front end (`findata serve mcp`)
 
@@ -170,8 +249,12 @@ stopped).
 
 - Writing launchd/systemd service files is out of scope (the foreground mode is what they
   would run). Foreground default and the `--background` flag are the user's decision.
+- *(Decided by the user, 2026-11-05: the web page carries no credential; browser sessions start
+  from a launch link printed by `serve web`. See "Browser access".)*
 - *(Revised by the user: the mcp role is read-only by default; writes need user-present
-  authorization. The grant mechanism above is my guess and still to be confirmed.)*
+  authorization. The grant mechanism and Touch ID for human-authority operations were
+  confirmed by the user on 2026-11-04; which operations prompt, and the no-prompt-possible
+  behaviour, are the builder's calls above.)*
 - Unix socket only on macOS and Linux; loopback with credential on Windows if needed.
 - Audit log is a database table (migration 0002), not a text file.
 - The old `findata serve` stops starting a server and becomes the parent of `serve web` and

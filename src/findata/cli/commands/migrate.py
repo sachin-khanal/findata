@@ -5,10 +5,17 @@ from __future__ import annotations
 import typer
 
 from findata.cli.output import JsonOpt, emit, fail
-from findata.config import get_settings
-from findata.db import make_engine
-from findata.schema import current_revision, head_revision, upgrade
-from findata.security import load_keys
+from findata.locations import Locations
+
+
+def _open(s, as_json: bool):
+    from findata.db import make_engine
+    from findata.security import load_keys
+
+    try:
+        return make_engine(s.db_path, load_keys(s).db_key)
+    except RuntimeError as exc:
+        fail(as_json, str(exc), error_code="NOT_CONFIGURED")
 
 
 def migrate(
@@ -25,13 +32,14 @@ def migrate(
     A brand-new database is simply created. An existing one is copied to
     `findata.db.bak-<timestamp>` (owner-only) before anything changes.
     """
+    from findata.config import get_settings
+    from findata.daemon.lock import DaemonAlreadyRunning, DaemonLock
+    from findata.schema import current_revision, head_revision, upgrade
+
     s = get_settings()
-    try:
-        engine = make_engine(s.db_path, load_keys(s).db_key)
-    except RuntimeError as exc:
-        fail(as_json, str(exc), error_code="NOT_CONFIGURED")
     head = head_revision()
-    if check:
+    if check:  # read-only: no lock needed
+        engine = _open(s, as_json)
         now = current_revision(engine)
         if now == head:
             emit(as_json, f"Schema is current (version {head}).", event="current", revision=head)
@@ -43,7 +51,25 @@ def migrate(
             revision=now,
             head=head,
         )
-    result = upgrade(engine, backup=backup)
+    # Hold the daemon's lock for the whole migration: a running daemon has the database open
+    # and checks the schema only at start-up, and a daemon cannot start halfway through. The
+    # lock comes before the keys and the database are touched, so a refused migrate does nothing.
+    locations = Locations(s.data_dir)
+    lock = DaemonLock(locations.lock, locations.pid)
+    try:
+        lock.acquire()
+    except DaemonAlreadyRunning as exc:
+        who = f" (pid {exc.pid})" if exc.pid is not None else ""
+        fail(
+            as_json,
+            f"The findata daemon is running{who}, or another migrate is. "
+            "Stop it with `findata stop`, then run `findata migrate`. Nothing was changed.",
+            error_code="DAEMON_RUNNING",
+        )
+    try:
+        result = upgrade(_open(s, as_json), backup=backup)
+    finally:
+        lock.release()
     if result.adopted and not result.changed:
         emit(
             as_json,

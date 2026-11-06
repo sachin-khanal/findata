@@ -9,9 +9,12 @@ dependencies = [
     "alembic>=1.20.0",
     "cryptography>=50.0",
     "fastapi>=0.141",
+    "httpx2>=2.13",
     "keyring>=25.7.0",
+    "mcp>=2.3.0",
     "plaid-python>=44.0",
     "pydantic-settings>=2.15",
+    "pyobjc-framework-localauthentication>=13.0 ; sys_platform == 'darwin'",
     "sqlalchemy>=2.0.54",
     "sqlcipher3>=0.6.3",
     "typer>=0.27",
@@ -23,7 +26,6 @@ findata = "findata.cli:app"
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.13",
     "pytest>=9.1",
     "ruff>=0.16",
 ]

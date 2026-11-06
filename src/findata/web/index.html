@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>findata</title>
-  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
   <style>
     body { font: 15px/1.5 system-ui, sans-serif; max-width: 880px; margin: 2rem auto; padding: 0 1rem; }
     button { font: inherit; padding: .5rem 1rem; margin-right: .5rem; cursor: pointer; }
@@ -14,25 +13,93 @@
     #status { color: #555; margin: 1rem 0; white-space: pre-wrap; padding: .5rem .75rem; border-left: 4px solid #bbb; background: #f6f6f6; }
     #status[data-state="working"], #status[data-state="waiting"] { border-color: #d89b00; }
     #status[data-state="ok"] { border-color: #2e8b57; }
-    #status[data-state="error"] { border-color: #c0392b; color: #8e1b0f; }
+    #status[data-state="error"], #status[data-state="offline"] { border-color: #c0392b; color: #8e1b0f; }
     .empty { color: #777; font-style: italic; margin: .5rem 0; }
     button:disabled { cursor: progress; opacity: .6; }
     .env { font-size: 12px; padding: 2px 6px; border-radius: 4px; background: #eee; }
+    .env:empty { display: none; }
+    #live { color: #555; margin: .5rem 0; }
+    #agent fieldset { border: 1px solid #ddd; margin: .5rem 0; }
+    #agent label { margin-right: 1rem; }
+    #agent-msg[data-state="error"] { color: #8e1b0f; }
+    #agent-confirm { color: #8a6100; }
   </style>
 </head>
 <body>
   <h1>findata <span class="env">__PLAID_ENV__</span></h1>
   <button id="link">Link an account</button>
   <button id="sync">Sync</button>
+  <p id="live" hidden>Disconnected from live updates. <button id="reconnect">Reconnect</button></p>
   <div id="status" role="status" aria-live="polite" data-state="idle">Ready. Link an account to get started.</div>
+  <section id="agent">
+    <h2>Agent access</h2>
+    <p id="grant-now" class="empty">Loading…</p>
+    <button id="revoke" hidden>Revoke</button>
+    <fieldset>
+      <legend>Let the agent write</legend>
+      <label><input type="checkbox" name="op" value="sync" checked> sync</label>
+      <label><input type="checkbox" name="op" value="link"> link</label>
+      <label><input type="checkbox" name="op" value="items.remove"> items.remove</label>
+      <label>for
+        <select id="grant-ttl">
+          <option value="900" selected>15 minutes</option>
+          <option value="3600">1 hour</option>
+          <option value="14400">4 hours</option>
+          <option value="86400">24 hours</option>
+        </select>
+      </label>
+      <button id="grant">Grant agent writes</button>
+    </fieldset>
+    <p id="agent-confirm" role="status" hidden>Confirm on your Mac (Touch ID or password)…</p>
+    <p id="agent-msg" role="status" aria-live="polite" data-state="idle"></p>
+    <h3>Removal requests</h3>
+    <ul id="requests"></ul>
+    <p id="requests-empty" class="empty" hidden>No pending requests.</p>
+  </section>
   <h2>Accounts</h2>
   <table id="accounts"></table>
   <p id="accounts-empty" class="empty" hidden>No accounts yet. Click "Link an account".</p>
   <h2>Recent transactions</h2>
   <table id="txns"></table>
-  <p id="txns-empty" class="empty" hidden>No transactions yet. After you link an account, Plaid can take a minute to load it; this page keeps checking and tells you what it is waiting for.</p>
+  <p id="txns-empty" class="empty" hidden>No transactions yet. After you link an account, Plaid can take a minute to load it; this page updates by itself when Plaid finishes.</p>
 <script>
-const TOKEN = "__FINDATA_TOKEN__";
+// The page holds no credential. A session starts from the launch link's fragment (#launch=...):
+// the secret is posted once and removed from the address bar. The session is an HttpOnly cookie
+// plus a request key kept here in localStorage (per origin, so per port) and sent as a header;
+// the cookie alone is refused, because cookies for 127.0.0.1 reach every port.
+const KEY_STORE = "findata.session_key";
+const OPEN_LINK = "Open the link printed by `findata serve web`.";
+// The key is read from storage on every request, never cached: another tab may have started a
+// newer session, and this tab must use it rather than overwrite or delete it.
+const storedKey = () => { try { return localStorage.getItem(KEY_STORE); } catch (e) { return null; } };
+function storeKey(key) { try { localStorage.setItem(KEY_STORE, key); } catch (e) { /* storage blocked */ } }
+// A refused key is removed only if it is still the stored one: a newer key must survive.
+function dropKey(sent) {
+  try { if (sent && localStorage.getItem(KEY_STORE) === sent) localStorage.removeItem(KEY_STORE); } catch (e) { /* ignore */ }
+}
+const sessionHeaders = (key) => (key ? { "X-Findata-Session": key } : {});
+let sessionError = null;
+
+// Start a session from a #launch=... fragment. The fragment is removed from the address bar
+// whenever it has that form, before anything else, even if the value turns out to be malformed.
+async function startSession() {
+  sessionError = null;
+  if (!location.hash.startsWith("#launch=")) return;
+  const secret = location.hash.slice("#launch=".length);
+  history.replaceState(null, "", "/");  // the secret leaves the address bar and the history
+  try {
+    if (!/^[A-Za-z0-9_-]+$/.test(secret)) throw apiError({ error_code: "LAUNCH_LINK_INVALID" });
+    const res = await fetch("/api/session", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ launch: secret }),
+    });
+    const body = JSON.parse(await res.text());
+    if (!res.ok) throw apiError(body);
+    storeKey(body.request_key);
+  } catch (e) { sessionError = e; }  // a failed launch never deletes a stored key
+}
+const PRESENCE = "__USER_PRESENCE__";  // touch_id | unsupported | "" (unknown: daemon was down)
 const $ = (id) => document.getElementById(id);
 // state: idle | working | waiting | ok | error. Exposed as data-state so scripts and headless
 // browsers can tell what the page is doing without parsing the message text.
@@ -40,19 +107,37 @@ const status = (msg, state = "idle") => {
   $("status").textContent = msg;
   $("status").dataset.state = state;
 };
-const busy = (on) => { $("link").disabled = on; $("sync").disabled = on; };
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const POLL_MS = 5000, MAX_POLLS = 24;  // keep checking up to 2 minutes while Plaid loads history
+// userBusy: a Link or Sync the user started is in flight; events then refresh the tables but
+// leave the status line to that action. historyEnded: a history job finished meanwhile.
+let userBusy = false, historyEnded = null;
+const busy = (on) => { userBusy = on; $("link").disabled = on; $("sync").disabled = on; };
+const historyStatus = (state) => state === "done"
+  ? status("History loaded.", "ok") : status(`History job ${state}.`, "error");
 
 async function api(path, opts = {}) {
+  const sent = storedKey();
   const res = await fetch(path, {
     ...opts,
-    headers: { "Content-Type": "application/json", "X-Findata-Token": TOKEN, ...(opts.headers || {}) },
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", ...sessionHeaders(sent), ...(opts.headers || {}) },
   });
+  if (res.status === 204) return null;  // success with no body (Revoke, Approve)
   const body = await res.json();
-  if (!res.ok) throw new Error(body.detail || JSON.stringify(body));
+  if (!res.ok) throw apiError(body, sent);
   return body;
 }
+
+// A stopped daemon is a state, not a failure of this page: say what to run.
+function apiError(body, sentKey = null) {
+  const noSession = body.error_code === "NO_BROWSER_SESSION" || body.error_code === "LAUNCH_LINK_INVALID";
+  if (noSession) dropKey(sentKey);  // a stale key is worth nothing: no retry, ask for the link
+  const err = new Error(noSession ? OPEN_LINK : (body.detail || JSON.stringify(body)));
+  err.noSession = noSession;
+  err.offline = body.error_code === "DAEMON_NOT_RUNNING";
+  return err;
+}
+const fail = (prefix, e) => e.offline || e.noSession
+  ? status(e.message, e.offline ? "offline" : "error") : status(`${prefix}: ${e.message}`, "error");
 
 function render(table, headers, rows) {
   const esc = (v) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -76,32 +161,43 @@ async function refresh() {
 const summarize = (results) => results.map((r) =>
   `${r.item_id}: +${r.added} new, ${r.modified} changed, ${r.removed} removed. ${r.detail}`).join("\n");
 
-// Sync, and while Plaid is still loading older history keep checking so the user never has to
-// guess whether "0 new" means "done" or "not ready yet".
+// Sync once. If Plaid is still loading older history the daemon waits for it in a job, and the
+// events below update this page when it finishes: nothing here asks again.
 async function sync() {
   busy(true);
+  historyEnded = null;
   try {
-    for (let attempt = 1; ; attempt++) {
-      status(attempt === 1 ? "Syncing…" : `Checking Plaid again (${attempt}/${MAX_POLLS})…`, "working");
-      const results = await api("/api/sync", { method: "POST" });
-      await refresh();
-      if (!results.length) { status("No linked items yet. Click \"Link an account\".", "idle"); return; }
-      if (results.every((r) => r.history_complete)) { status(summarize(results), "ok"); return; }
-      if (attempt >= MAX_POLLS) {
-        status(summarize(results) + "\n\nPlaid is still loading history. Nothing is lost: click Sync again in a minute or two.", "waiting");
-        return;
-      }
-      status(summarize(results) + `\n\nPlaid is still loading history. Checking again in ${POLL_MS / 1000}s…`, "waiting");
-      await sleep(POLL_MS);
-    }
+    status("Syncing…", "working");
+    const results = await api("/api/sync", { method: "POST" });
+    await refresh();
+    if (!results.length) { status("No linked items yet. Click \"Link an account\".", "idle"); return; }
+    if (results.every((r) => r.history_complete)) { status(summarize(results), "ok"); return; }
+    if (historyEnded) { historyStatus(historyEnded); return; }  // the job already finished
+    status(summarize(results) + "\n\nPlaid is still loading history. This page updates when it finishes.", "waiting");
   } catch (e) {
-    status(`Sync failed: ${e.message}`, "error");
+    fail("Sync failed", e);
   } finally { busy(false); }
+}
+
+// Plaid's script is third-party code: it is loaded only when the user clicks Link, never at
+// page load, so it cannot see the launch secret and does not run at all unless they link.
+let plaidLoading = null;
+function loadPlaid() {
+  if (window.Plaid) return Promise.resolve();
+  plaidLoading = plaidLoading || new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+    s.onload = resolve;
+    s.onerror = () => { plaidLoading = null; s.remove(); reject(new Error("Plaid's script did not load")); };
+    document.head.appendChild(s);
+  });
+  return plaidLoading;
 }
 
 $("link").onclick = async () => {
   try {
     status("Opening Plaid Link…", "working");
+    await loadPlaid();
     const { link_token } = await api("/api/link/token", { method: "POST" });
     Plaid.create({
       token: link_token,
@@ -111,13 +207,13 @@ $("link").onclick = async () => {
           const item = await api("/api/link/exchange", { method: "POST", body: JSON.stringify({ public_token }) });
           status(`Linked ${item.institution_name || item.id}. Loading transactions…`, "working");
           await sync();
-        } catch (e) { status(`Linking failed: ${e.message}`, "error"); }
+        } catch (e) { fail("Linking failed", e); }
       },
       onExit: (err) => status(err
         ? `Link closed with an error (${err.error_code || "unknown"}): ${err.error_message || ""}`
         : "Link closed without connecting an account.", err ? "error" : "idle"),
     }).open();
-  } catch (e) { status(`Could not start Plaid Link: ${e.message}`, "error"); }
+  } catch (e) { fail("Could not start Plaid Link", e); }
 };
 $("sync").onclick = () => sync();
 // On load, say what is already linked instead of the first-run "link an account" hint.
@@ -130,7 +226,196 @@ async function showLinked() {
     (last ? `Last synced ${new Date(last + "Z").toLocaleString()}.` : "Not synced yet: click Sync."), "idle");
 }
 
-refresh().then(showLinked).catch((e) => status(`Could not load data: ${e.message}`, "error"));
+// ---- Agent access. Everything here is driven by clicks and daemon events, never a timer. ----
+let agentBusy = false, agentLoaded = false;  // until loaded, say nothing about the state
+const requests = new Map();  // request_id -> {operation, institution}
+const agentMsg = (msg, state = "idle") => { $("agent-msg").textContent = msg; $("agent-msg").dataset.state = state; };
+// A clock time, with the date too when it is not today (a 24 hour grant ends tomorrow).
+const clockTime = (iso) => {
+  const t = new Date(/(Z|[+-]\d\d:?\d\d)$/.test(iso) ? iso : iso + "Z");
+  return t.toDateString() === new Date().toDateString() ? t.toLocaleTimeString() : t.toLocaleString();
+};
+
+function showGrant(grant) {
+  $("grant-now").textContent = grant
+    ? `Agent may ${grant.operations.join(", ")} until ${clockTime(grant.expires_at)}.`
+    : "The agent is read-only.";
+  $("grant-now").classList.toggle("empty", !grant);
+  $("revoke").hidden = !grant;
+}
+
+function showRequests() {
+  const list = $("requests");
+  list.replaceChildren();
+  for (const [id, r] of requests) {
+    const li = document.createElement("li");
+    li.append(`${r.institution || "A linked bank"}: ${r.operation} `);
+    const button = document.createElement("button");
+    button.textContent = "Approve";
+    button.disabled = agentBusy;
+    button.onclick = () => approve(id);
+    li.append(button);
+    list.append(li);
+  }
+  $("requests-empty").hidden = !agentLoaded || requests.size > 0;
+}
+
+function agentWorking(on, confirming = false) {
+  agentBusy = on;
+  $("grant").disabled = on;
+  $("revoke").disabled = on;
+  $("agent-confirm").hidden = !(on && confirming && PRESENCE !== "unsupported");
+  showRequests();
+}
+
+async function loadAgent() {
+  showGrant(await api("/api/grants"));
+  requests.clear();
+  for (const r of await api("/api/approvals")) requests.set(r.request_id, r);
+  agentLoaded = true;
+  showRequests();
+}
+
+// A refused or failed request is a plain message in the panel, not the page's status line.
+// After a refused session the panel says so too, instead of staying at "Loading…".
+function sessionRefused(e) {
+  status(e.message, "error");
+  $("grant-now").textContent = e.message;
+  $("grant-now").classList.add("empty");
+  $("grant").disabled = true;
+  $("revoke").hidden = true;
+}
+
+const agentFail = (prefix, e) => agentMsg(e.offline || e.noSession ? e.message : `${prefix}: ${e.message}`, "error");
+
+$("grant").onclick = async () => {
+  const operations = [...document.querySelectorAll('input[name="op"]:checked')].map((c) => c.value);
+  if (!operations.length) { agentMsg("Choose at least one operation.", "error"); return; }
+  agentWorking(true, true);
+  agentMsg("", "idle");
+  try {
+    showGrant(await api("/api/grants", { method: "POST",
+      body: JSON.stringify({ operations, ttl_s: Number($("grant-ttl").value) }) }));
+  } catch (e) { agentFail("Could not grant", e); } finally { agentWorking(false); }
+};
+
+$("revoke").onclick = async () => {
+  agentWorking(true);
+  agentMsg("", "idle");
+  try {
+    await api("/api/grants", { method: "DELETE" });
+    showGrant(null);
+  } catch (e) { agentFail("Could not revoke", e); } finally { agentWorking(false); }
+};
+
+async function approve(id) {
+  agentWorking(true, true);
+  agentMsg("", "idle");
+  try {
+    await api(`/api/approvals/${encodeURIComponent(id)}`, { method: "POST" });
+    requests.delete(id);
+  } catch (e) { agentFail("Could not approve", e); } finally { agentWorking(false); }
+}
+
+function onAgentEvent(ev) {
+  switch (ev.event) {
+    case "grant_created": showGrant(ev); break;
+    case "grant_revoked": case "grant_expired": showGrant(null); break;
+    case "approval_requested":
+      requests.set(ev.request_id, { operation: ev.operation, institution: ev.institution }); showRequests(); break;
+    case "approval_approved": case "approval_expired":
+      requests.delete(ev.request_id); showRequests(); break;
+    case "gap": loadAgent().catch((e) => agentFail("Could not load agent access", e)); break;
+  }
+}
+
+// Live updates: the daemon's events, one JSON object per line, read with fetch because
+// the built-in SSE reader cannot send the session header. When the stream ends the page says so and waits
+// for a click: it never reconnects on its own.
+let lastSeq = null, following = false;
+
+async function reloadAll() {
+  await refresh();
+  await showLinked();
+}
+
+const loadFailed = (e) => fail("Could not load data", e);
+
+function onEvent(ev) {
+  if (ev.seq != null) lastSeq = ev.seq;
+  onAgentEvent(ev);
+  switch (ev.event) {
+    case "gap": case "item_linked": case "item_removed":
+      (userBusy ? refresh() : reloadAll()).catch(loadFailed); break;
+    case "sync_completed":
+      refresh().catch(loadFailed); break;
+    case "job_started":  // other jobs (a CLI sandbox-link) are not this page's business
+      if (ev.kind === "history" && !userBusy) {
+        status("Plaid is loading history. This page updates when it finishes.", "waiting");
+      }
+      break;
+    case "job_finished":
+      if (ev.kind !== "history") break;
+      historyEnded = ev.state;
+      refresh().then(() => { if (!userBusy) historyStatus(ev.state); }).catch(loadFailed);
+      break;
+  }
+}
+
+// Read the event stream until it ends. The body is cancelled on every way out, so a page that
+// fails to render an event never leaves the daemon-side stream (and a browser connection) open.
+async function follow() {
+  $("live").hidden = true;
+  let reader = null;
+  try {
+    const q = lastSeq == null ? "" : `?after=${lastSeq}`;
+    const sent = storedKey();
+    const res = await fetch("/api/events" + q, { credentials: "same-origin", headers: sessionHeaders(sent) });
+    if (!res.ok) throw apiError(await res.json(), sent);
+    reader = res.body.getReader();
+    following = true;
+    agentWorking(false);  // undo sessionRefused() once a session works
+    if (lastSeq == null) { await reloadAll(); await loadAgent(); }
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.event !== "keepalive") onEvent(ev);
+      }
+    }
+  } catch (e) {
+    if (e.offline) status(e.message, "offline");
+    else if (e.noSession) sessionRefused(e);
+    else status(`Live updates stopped: ${e.message}`, "error");
+  } finally {
+    following = false;
+    if (reader) reader.cancel().catch(() => {});
+  }
+  $("live").hidden = false;
+}
+
+$("reconnect").onclick = () => follow();
+const begin = async () => {
+  await startSession();
+  if (sessionError) sessionRefused(sessionError); else follow();
+};
+// Pasting a new launch link into this tab is only a fragment change: no reload, so start the
+// session here. If the stream is already live the page keeps it; otherwise it loads afresh.
+window.addEventListener("hashchange", () => {
+  if (!location.hash.startsWith("#launch=")) return;
+  if (!following) lastSeq = null;
+  startSession().then(() => {
+    if (sessionError) sessionRefused(sessionError); else if (!following) follow();
+  });
+});
+begin();
 </script>
 </body>
 </html>

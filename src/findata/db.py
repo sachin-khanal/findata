@@ -11,6 +11,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     create_engine,
@@ -19,6 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.exc import DatabaseError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
+from sqlalchemy.pool import QueuePool, StaticPool
 from sqlalchemy.types import TypeDecorator
 
 from findata.security import create_private_file
@@ -110,6 +112,23 @@ class Transaction(Base):
     )
 
 
+class AuditEntry(Base):
+    """One request to the daemon: who, which operation, when, and how it ended.
+
+    Never holds request data: `summary` is only the method, route template and query-parameter
+    names (see `findata.daemon.audit`), so no transaction data or secrets land here.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    role: Mapped[str] = mapped_column(String(16))
+    operation: Mapped[str] = mapped_column(String(64))
+    summary: Mapped[str] = mapped_column(String(255))
+    outcome: Mapped[str] = mapped_column(String(32))
+
+
 def _sqlite_pragmas(dbapi_conn, _record):
     # Registered per engine in make_engine, *after* the dialect's own connect hook has applied
     # the SQLCipher key. A class-wide listener would run first and hit an unreadable database.
@@ -139,9 +158,15 @@ def make_engine(db_path: Path | str, db_key: bytes) -> Engine:
     )
     kwargs: dict = {"connect_args": {"check_same_thread": False}}
     if in_memory:
-        from sqlalchemy.pool import StaticPool
-
         kwargs["poolclass"] = StaticPool
+    else:
+        # Not the pysqlcipher dialect's default, SingletonThreadPool: it keeps a connection per
+        # thread and, once more than five threads have connected, closes other threads'
+        # connections whether or not they are in use, which crashes the process mid-statement.
+        # The daemon's request, job and audit threads pass five quickly. A QueuePool connection
+        # is the caller's alone until returned, and with no overflow cap no caller waits for one.
+        kwargs["poolclass"] = QueuePool
+        kwargs["max_overflow"] = -1
     engine = create_engine(url, **kwargs)
     event.listen(engine, "connect", _sqlite_pragmas)
     try:

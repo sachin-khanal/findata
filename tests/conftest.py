@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from findata.config import Settings
+from findata.daemon.presence import MacPresence, Presence, PresenceKind
 from findata.db import make_engine, make_session_factory
 from findata.plaid_gateway import PlaidError
 from findata.schema import ensure_current
@@ -89,6 +90,35 @@ class FakeGateway:
         return page
 
 
+class FakePresence:
+    """A PresenceChecker that answers `outcome` and records every reason it is asked about."""
+
+    def __init__(self, outcome: Presence = "confirmed", kind: PresenceKind = "touch_id") -> None:
+        self.outcome = outcome
+        self.kind = kind
+        self.reasons: list[str] = []
+
+    def confirm(self, reason: str) -> Presence:
+        self.reasons.append(reason)
+        return self.outcome
+
+
+@pytest.fixture(autouse=True)
+def _never_show_a_real_presence_prompt(monkeypatch):
+    """No test may bring up Touch ID or the password prompt on this Mac: a `MacPresence`
+    without a fake context factory fails the test instead of asking."""
+    real_confirm = MacPresence.confirm
+
+    def guarded(self: MacPresence, reason: str) -> Presence:
+        if self._context_factory is None:
+            pytest.fail(
+                "A test called the real MacPresence.confirm; give the daemon a FakePresence."
+            )
+        return real_confirm(self, reason)
+
+    monkeypatch.setattr(MacPresence, "confirm", guarded)
+
+
 @pytest.fixture
 def settings(tmp_path) -> Settings:
     return Settings(
@@ -121,3 +151,29 @@ def session(engine):
 @pytest.fixture
 def cipher(keys):
     return keys.cipher
+
+
+@pytest.fixture
+def cli_against(monkeypatch, settings):
+    """Run the CLI against an in-process daemon app: `attach(app)` returns `invoke(*args)`.
+
+    The CLI's `connect` is replaced by one that builds a `cli`-role client over the app, so the
+    commands run unchanged and nothing needs a socket or a running daemon.
+    """
+    from fastapi.testclient import TestClient
+    from typer.testing import CliRunner
+
+    from findata import cli
+    from findata.client import DaemonClient
+
+    def attach(app):
+        monkeypatch.setattr(
+            "findata.cli.session.connect",
+            lambda as_json: DaemonClient(
+                settings.data_dir, "cli", http_client=TestClient(app, base_url="http://daemon")
+            ),
+        )
+        runner = CliRunner()
+        return lambda *args, **kw: runner.invoke(cli.app, list(args), **kw)
+
+    return attach
