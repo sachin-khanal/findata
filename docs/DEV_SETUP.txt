@@ -2,6 +2,7 @@ FINDATA - DEVELOPMENT SETUP
 ===========================
 
 Written for: developers working on findata locally.
+Project conventions (branches, changelog, dev tooling, running things): AGENTS.md.
 
 Python environment, dependencies and commands are all managed by uv. You do not
 need to create or activate a virtualenv by hand.
