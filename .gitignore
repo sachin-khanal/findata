@@ -21,7 +21,17 @@ build/
 .DS_Store
 .idea/
 .vscode/
-.playwright-mcp/
 
-# Claude Code per-machine settings
+# Dev tooling: per-developer agent and tool state never belongs in the repo (see AGENTS.md).
+# Shared project config that is tracked on purpose: .claude/settings.json, .claude/hooks/,
+# .pre-commit-config.yaml, .github/.
 .claude/settings.local.json
+.serena/
+.agents/
+skills-lock.json
+.superpowers/
+.playwright-mcp/
+.cursor/
+.codex/
+.aider*
+.continue/
