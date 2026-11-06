@@ -43,7 +43,9 @@ decisions and the limits.
 - The `mcp` role is read-only. A human can grant it writes for a limited time:
   `findata grant mcp-write --ops sync,link,items.remove --for 15m` (default `sync`, 15 minutes,
   at most 24 hours), or from the web panel. A grant expires by itself, ends at
-  `findata revoke mcp-write`, and is cleared when the daemon stops.
+  `findata revoke mcp-write`, and is cleared when the daemon stops. A grant is checked once,
+  when a request is admitted: revoking it does not stop an agent write already in progress,
+  which completes and is audited, but the agent's next write is refused.
 - Every agent removal also needs a fresh approval for that one removal (`findata approve <id>`
   or the web panel), even inside a grant.
 - A refused agent write fails with `WRITE_NOT_GRANTED` and a message that says what the human
@@ -123,7 +125,17 @@ authority. It does not make a hostile process safe.
 - **Another local account can overwrite the session cookie**, which logs the user out. It
   cannot read the cookie.
 - **Linux and Windows have no presence check yet.** Web grants and approvals are refused there;
-  terminal grants are not confirmed by the user.
+  terminal grants are not confirmed by the user. So on those platforms an agent with a shell as
+  the user can read `credentials/cli.token` or run `findata grant` and give itself writes:
+  such agents must run sandboxed there.
+- **Windows is untested.** There the daemon falls back to loopback TCP with the same
+  credentials, protected only by file ACLs on the data directory. The port is recorded in
+  `daemon.port` when the socket is bound. A held daemon lock (for example during
+  `findata migrate`) does not prove a daemon is serving, and a `daemon.port` left by a crash
+  could point a client, and its credential, at another program on that port.
+- **One loose or unreadable credential file stops that role.** A `credentials/<role>.token`
+  readable by other users, or empty or corrupt, makes that front end fail with a clear error
+  naming the file: `chmod 600` it, or delete it and run `findata init`.
 
 ## Consequences
 

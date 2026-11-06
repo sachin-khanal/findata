@@ -77,7 +77,9 @@ findata audit                                    # who asked for what, and wheth
 **Touch ID.** On a Mac, the daemon asks for Touch ID (or your password) before it creates a grant,
 approves a request, or removes an Item for you. Read the prompt. It says what you are allowing,
 and a touch without reading approves it. Where the check is not available (Linux and Windows
-today), grants and approvals from the web UI are refused. Do them from a terminal.
+today), grants and approvals from the web UI are refused. Do them from a terminal. There, an
+agent that can run shell commands as you could also grant itself writes, so run such agents
+sandboxed (see ADR 0004, Residual limits).
 
 **What the agent sees when refused.** A write without a grant fails with `WRITE_NOT_GRANTED` and
 a message that tells it to ask you to run `findata grant mcp-write --ops <operation>`. Nothing is

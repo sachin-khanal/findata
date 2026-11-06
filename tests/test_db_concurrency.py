@@ -111,3 +111,22 @@ def test_concurrent_job_commits_and_audit_writes_never_crash(tmp_path):
     )
     assert "database is locked" not in r.stderr, r.stderr[-4000:]
     assert r.returncode == 0, f"exit {r.returncode}\n{r.stderr[-4000:]}"
+
+
+def test_file_databases_use_an_uncapped_queue_pool_and_memory_keeps_static(tmp_path):
+    """Pins the pool choice above: the pysqlcipher default (SingletonThreadPool) closes other
+    threads' connections mid-statement once more than five threads have connected."""
+    from sqlalchemy.pool import QueuePool, StaticPool
+
+    key = Keys.from_master(b"k" * 32).db_key
+    engine = make_engine(tmp_path / "pool.db", key)
+    try:
+        assert isinstance(engine.pool, QueuePool)
+        assert engine.pool._max_overflow == -1  # no caller ever waits for a connection
+    finally:
+        engine.dispose()
+    memory = make_engine(":memory:", key)
+    try:
+        assert isinstance(memory.pool, StaticPool)
+    finally:
+        memory.dispose()

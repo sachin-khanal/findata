@@ -9,6 +9,9 @@ import typer
 
 app = typer.Typer(no_args_is_help=True, help="Run a front end for the daemon.")
 
+# The web UI is for this computer only: any other address would put it on the network.
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
 
 @app.command("web")
 def web(
@@ -28,6 +31,13 @@ def web(
     from findata.web.session import WebSessions
 
     s = ClientSettings()
+    if s.findata_host not in LOOPBACK_HOSTS:
+        typer.echo(
+            f"Error: FINDATA_HOST={s.findata_host!r} would serve the web UI beyond this "
+            "computer. Use 127.0.0.1 (the default), ::1 or localhost.",
+            err=True,
+        )
+        raise typer.Exit(1)
     client = DaemonClient(s.data_dir, "web")
     sessions = WebSessions()
     link = sessions.launch_url(s.findata_host, s.findata_port)

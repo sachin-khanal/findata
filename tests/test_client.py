@@ -114,10 +114,17 @@ def test_missing_credential_file_names_the_file_and_fix(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
-def test_loose_credential_file_propagates_permission_error(d):
+def test_loose_credential_file_is_a_client_error_naming_the_fix(d):
     path = d.locations.credentials_dir / "cli.token"
     path.chmod(0o644)
-    with pytest.raises(PermissionError, match="chmod 600"):
+    with pytest.raises(DaemonClientError, match=r"cli\.token.*chmod 600") as e:
+        make_client(d).items()
+    assert not isinstance(e.value, DaemonNotRunning)
+
+
+def test_corrupt_credential_file_is_a_client_error_naming_the_file(d):
+    (d.locations.credentials_dir / "cli.token").write_bytes(b"\xff\xfe\xfa")
+    with pytest.raises(DaemonClientError, match=r"cli\.token.*findata init"):
         make_client(d).items()
 
 

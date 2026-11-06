@@ -179,7 +179,7 @@ def _already_running(job_id: str) -> DaemonError:
         409,
         "JOB_ALREADY_RUNNING",
         "A sandbox-link or history job is already running (one at a time); follow it "
-        "(GET /v1/jobs/{job_id}/events) instead of starting another.",
+        f"(GET /v1/jobs/{job_id}/events) instead of starting another.",
         job_id=job_id,
     )
 

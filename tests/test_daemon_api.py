@@ -574,3 +574,79 @@ def test_audit_failure_never_fails_the_request(settings, keys, gateway, caplog):
     assert warnings and "audit" in warnings[0].getMessage().lower()
     text = caplog.text
     assert "secret-ish" not in text and "X1" not in text and d.tokens["cli"] not in text
+
+
+# ---------- structural: every /v1 route authenticates ----------
+
+# Routes that may be called without a role credential. None today: add one here only on purpose.
+OPEN_V1_ROUTES: set[str] = set()
+
+
+def _calls(dependant) -> set:
+    """Every callable in a route's dependency tree (router-level dependencies included)."""
+    found = {dependant.call}
+    for sub in dependant.dependencies:
+        found |= _calls(sub)
+    return found
+
+
+def test_every_v1_route_depends_on_resolve_role(d):
+    from findata.daemon.deps import resolve_role
+    from tests.test_web_session import _api_routes
+
+    routes = [r for r in _api_routes(d.client.app.routes) if r.path.startswith("/v1")]
+    assert len(routes) >= 15 and any(r.path == "/v1/items/{item_id}" for r in routes)
+    unprotected = sorted(
+        f"{sorted(r.methods)} {r.path}"
+        for r in routes
+        if r.path not in OPEN_V1_ROUTES and resolve_role not in _calls(r.dependant)
+    )
+    assert unprotected == []
+
+
+# ---------- revoke while an agent write is in flight ----------
+
+
+class GatedGateway(FakeGateway):
+    """Once armed, transactions_sync signals `entered` and waits for `release`."""
+
+    def __init__(self, pages) -> None:
+        super().__init__(pages)
+        self.armed = False
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def transactions_sync(self, access_token, cursor, count=500):
+        if self.armed:
+            self.entered.set()
+            assert self.release.wait(10), "the test never released the gateway"
+        return super().transactions_sync(access_token, cursor, count)
+
+
+def test_revoke_during_an_agent_sync_lets_it_finish_and_refuses_the_next(settings, keys):
+    gateway = GatedGateway(_pages())
+    d = _build(settings, keys, gateway)
+    _link_and_sync(d)
+    d.grants.grant({"sync"}, 600)
+    gateway.armed = True
+    result: dict = {}
+    worker = threading.Thread(
+        target=lambda: result.update(r=d.client.post("/v1/sync", headers=d.as_["mcp"]))
+    )
+    worker.start()
+    try:
+        assert gateway.entered.wait(10), "the agent's sync never reached Plaid"
+        # The grant is checked once, at admission: revoking now does not stop this sync.
+        assert d.client.delete("/v1/grants", headers=d.as_["cli"]).status_code == 204
+    finally:
+        gateway.release.set()
+        worker.join(10)
+    assert result["r"].status_code == 200, result["r"].text
+    gateway.armed = False
+    _error(d.client.post("/v1/sync", headers=d.as_["mcp"]), 403, "WRITE_NOT_GRANTED")
+    rows = [(r["role"], r["operation"], r["outcome"]) for r in _audit(d)]
+    assert rows[:3] == [
+        ("mcp", "sync", "denied"),
+        ("mcp", "sync", "ok"),
+        ("cli", "grants.revoke", "ok"),
+    ]

@@ -128,6 +128,11 @@ _PRESENCE_REFUSALS: dict[Presence, str] = {
     "the Mac.",
 }
 
+_PRESENCE_ERROR = (
+    "The check at the computer (Touch ID or password) could not run, so nothing was changed. "
+    "The daemon log has the error type."
+)
+
 
 # The page's token can be read by any local process, so the browser may not act without a real
 # check: where the platform has none, the web role is refused (the CLI is not).
@@ -142,16 +147,24 @@ def presence_gate(request: Request, role: RoleDep, state: StateDep) -> Callable[
 
     The route calls the returned function once its own checks have passed, before it changes
     anything or takes `PLAID_WRITE_LOCK`. For `cli` and `web` it asks the user to confirm
-    `reason` at the Mac and raises USER_PRESENCE_REQUIRED unless they do (or the platform has
-    no check); the outcome goes into the request's audit entry. The agent (mcp) is never
-    asked: its only gated route is a removal whose approval was already confirmed in person.
+    `reason` at the Mac and raises USER_PRESENCE_REQUIRED unless they do. Where the platform
+    has no check, `cli` proceeds and `web` is refused; a checker that raises is a refusal
+    audited as `presence=error`. The outcome goes into the request's audit entry. The agent
+    (mcp) is never asked: its only gated route is a removal whose approval was already
+    confirmed in person.
     """
 
     def confirm(reason: str) -> None:
         if role == "mcp":
             return
-        outcome = state.presence.confirm(reason)
         facts: RequestAudit | None = request.scope.get(SCOPE_KEY)
+        try:
+            outcome = state.presence.confirm(reason)
+        except Exception as exc:  # e.g. pyobjc missing or broken: refuse, and audit it
+            logger.error("The user-presence check could not run: %s", type(exc).__name__)
+            if facts is not None:
+                facts.presence = "error"
+            raise DaemonError(403, "USER_PRESENCE_REQUIRED", _PRESENCE_ERROR) from None
         if facts is not None:
             facts.presence = outcome
         if outcome == "unsupported" and role == "web":

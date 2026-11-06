@@ -30,6 +30,20 @@ def invoke(cli_against, d):
     return cli_against(d.client.app)
 
 
+@pytest.fixture
+def mac(monkeypatch):
+    """The presence notice is printed only on macOS, the one platform with a presence check."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_presence_notice_is_mac_only(platform, invoke, d, monkeypatch):
+    monkeypatch.setattr(sys, "platform", platform)
+    r = invoke("grant", "mcp-write", "--json")
+    assert r.exit_code == 0, r.output
+    assert NOTICE not in r.output and "Touch ID" not in r.stderr
+
+
 def _last(result) -> dict:
     return json.loads(result.stdout.splitlines()[-1])
 
@@ -71,6 +85,18 @@ def test_every_data_command_reports_daemon_not_running(args, settings, monkeypat
     )
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_loose_credential_file_is_one_json_error_event_not_a_traceback(invoke, d):
+    (d.locations.credentials_dir / "cli.token").chmod(0o644)
+    r = invoke("status", "--json")
+    assert r.exit_code == 1
+    event = _last(r)
+    assert event["event"] == "error" and "chmod 600" in event["message"]
+    assert "cli.token" in event["message"]
+    assert len(r.stdout.splitlines()) == 1 and "Traceback" not in r.output
+    assert r.exception is None or isinstance(r.exception, SystemExit)
+
+
 def test_stop_without_a_daemon_says_so(settings, monkeypatch):
     monkeypatch.setenv("FINDATA_DATA_DIR", str(settings.data_dir))
     CredentialStore(Locations(settings.data_dir)).ensure_all()
@@ -99,7 +125,7 @@ def test_data_commands_read_through_the_daemon(invoke, d):
     assert invoke("stop").exit_code == 0 and d.shutdowns == [True]
 
 
-def test_items_rm_matches_a_unique_prefix_and_refuses_ambiguity(invoke, d):
+def test_items_rm_matches_a_unique_prefix_and_refuses_ambiguity(invoke, d, mac):
     _link_and_sync(d)
     miss = invoke("items", "rm", "zzz", "--yes", "--json")
     assert miss.exit_code == 1 and _last(miss)["error_code"] == "NO_UNIQUE_MATCH"
@@ -113,7 +139,7 @@ def test_items_rm_matches_a_unique_prefix_and_refuses_ambiguity(invoke, d):
 # ---------- grants, approvals ----------
 
 
-def test_grant_and_revoke_round_trip(invoke, d):
+def test_grant_and_revoke_round_trip(invoke, d, mac):
     r = invoke("grant", "mcp-write", "--json")  # least privilege: sync only, 15 minutes
     assert r.exit_code == 0, r.output
     assert NOTICE in r.stderr and NOTICE not in r.stdout
@@ -158,7 +184,7 @@ def test_grant_accepts_up_to_24_hours_in_any_unit(invoke, d):
         assert (d.grants.current().expires_at - d.clock()).total_seconds() == seconds
 
 
-def test_approve_unblocks_an_agent_removal(invoke, d):
+def test_approve_unblocks_an_agent_removal(invoke, d, mac):
     _link_and_sync(d)
     rid = _agent_request(d)
     r = invoke("approve", rid, "--json")
@@ -184,7 +210,7 @@ def test_cli_approve_accepts_every_request_id_shape(invoke, d, monkeypatch):
 
 
 @pytest.mark.parametrize("command", ["grant", "approve", "items rm"])
-def test_presence_refusal_is_reported_clearly(command, invoke, d):
+def test_presence_refusal_is_reported_clearly(command, invoke, d, mac):
     _link_and_sync(d)
     rid = _agent_request(d)
     d.presence.outcome = "denied"

@@ -244,6 +244,35 @@ def test_not_possible_is_refused_with_the_ssh_hint(d, presence):
     assert all(s.endswith(" presence=not_possible") and o == "denied" for _, _, s, o in rows)
 
 
+class RaisingPresence(FakePresence):
+    """A checker that cannot run, as when pyobjc is missing or broken."""
+
+    def confirm(self, reason: str):
+        self.reasons.append(reason)
+        raise ImportError("no module named LocalAuthentication (secret-ish detail)")
+
+
+def test_a_presence_check_that_raises_is_refused_and_audited(settings, keys, gateway, caplog):
+    d = _build(settings, keys, gateway, presence=RaisingPresence())
+    _link_and_sync(d)
+    rid = _agent_request(d)
+    for method, path, kw in (
+        ("POST", "/v1/grants", {"json": {"operations": ["link"], "ttl_s": 60}}),
+        ("POST", f"/v1/approvals/{rid}", {}),
+        ("DELETE", "/v1/items/item_1", {}),
+    ):
+        r = d.client.request(method, path, headers=d.as_["cli"], **kw)
+        assert r.status_code == 403, (path, r.status_code)
+        assert "could not run" in _error(r, 403, "USER_PRESENCE_REQUIRED")["detail"]
+    assert d.grants.current().operations == ["items.remove"]  # unchanged
+    assert [p["request_id"] for p in d.approvals.pending()] == [rid]
+    assert d.gateway.removed_tokens == []
+    rows = _gated_rows(d)
+    assert len(rows) == 3
+    assert all(s.endswith(" presence=error") and o == "denied" for _, _, s, o in rows)
+    assert "ImportError" in caplog.text and "secret-ish detail" not in caplog.text
+
+
 def test_unsupported_platform_allows_and_audits_presence_unsupported(settings, keys, gateway):
     d = _build(settings, keys, gateway, presence=UnsupportedPresence())
     _link_and_sync(d)

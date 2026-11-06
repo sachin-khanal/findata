@@ -254,6 +254,7 @@ def test_second_job_while_one_runs_is_409_with_the_running_id(settings, keys):
     assert started.wait(10)
     body = _error(d.client.post(URL, headers=d.as_["cli"], json={}), 409, "JOB_ALREADY_RUNNING")
     assert body["job_id"] == first
+    assert f"/v1/jobs/{first}/events" in body["detail"] and "{job_id}" not in body["detail"]
     assert len(d.app.state.daemon.jobs._jobs) == 1
     release.set()
     assert _finish(d, first)["state"] == "done"

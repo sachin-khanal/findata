@@ -42,7 +42,8 @@ directory you run from. .env is git-ignored. Never commit it.
   FINDATA_PORT       optional, default 8765; used by "findata serve web" only
 
 The daemon starts without Plaid keys. Calls that need Plaid fail until they are
-set. Keep FINDATA_HOST on 127.0.0.1; the web server is designed for loopback.
+set. FINDATA_HOST must be a loopback address (127.0.0.1, ::1 or localhost):
+"serve web" refuses any other host before it binds.
 Only the daemon reads the Plaid keys. The CLI, "serve web" and "serve mcp" never
 load them.
 

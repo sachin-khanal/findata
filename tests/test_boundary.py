@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 import findata
 
 PACKAGE = Path(findata.__file__).parent
@@ -75,9 +77,10 @@ def test_front_ends_and_data_cli_never_import_core_modules():
     assert not offenders, "\n".join(offenders)
 
 
-def test_cli_import_does_not_load_core_modules():
+@pytest.mark.parametrize("front_end", ["findata.cli", "findata.web.app", "findata.mcp.server"])
+def test_front_end_import_does_not_load_core_modules(front_end):
     code = (
-        "import sys, findata.cli\n"
+        f"import sys, {front_end}\n"
         f"core = {CORE!r}\n"
         "loaded = [m for m in sys.modules if any(m == 'findata.' + n or "
         "m.startswith('findata.' + n + '.') for n in core)]\n"
@@ -87,4 +90,4 @@ def test_cli_import_does_not_load_core_modules():
         [sys.executable, "-c", code], capture_output=True, text=True, check=True, timeout=60
     )
     loaded = result.stdout.strip()
-    assert loaded == "", f"core modules loaded by importing findata.cli: {loaded}"
+    assert loaded == "", f"core modules loaded by importing {front_end}: {loaded}"

@@ -115,6 +115,14 @@ class DaemonClient:
                     f"No credential file for role {self._role!r} at {path}. "
                     "Run `findata init` (or `findata start`, which creates credentials)."
                 ) from None
+            except PermissionError as e:
+                # read_secret_file's message names the file and the `chmod 600` fix.
+                raise DaemonClientError(str(e)) from None
+            except (OSError, UnicodeError) as e:
+                raise DaemonClientError(
+                    f"Cannot read credential file {path} ({type(e).__name__}); "
+                    "delete it and run `findata init`."
+                ) from None
             if not value:
                 raise DaemonClientError(
                     f"Credential file {path} is empty; delete it and run `findata init`."

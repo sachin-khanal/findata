@@ -6,6 +6,7 @@ database or Plaid.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -33,8 +34,9 @@ def connect(as_json: bool) -> DaemonClient:
 
 def announce_presence_prompt() -> None:
     """Tell the person where to look while the daemon waits for Touch ID (stderr, so never
-    mixed into `--json` output)."""
-    typer.echo(PRESENCE_NOTICE, err=True)
+    mixed into `--json` output). Only macOS has a presence check, so elsewhere it says nothing."""
+    if sys.platform == "darwin":
+        typer.echo(PRESENCE_NOTICE, err=True)
 
 
 @contextmanager

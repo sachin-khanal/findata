@@ -185,6 +185,16 @@ class DownClient(DaemonClient):
         raise DaemonNotRunning("The findata daemon is not running. Start it with `findata start`.")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_loose_web_credential_is_a_clear_json_error_not_a_500(settings, d):
+    (d.locations.credentials_dir / "web.token").chmod(0o644)
+    c = TestClient(make_app(d, settings), base_url="http://127.0.0.1")
+    r = c.get("/api/items", headers=login(c))
+    assert r.status_code == 503
+    assert r.json()["error_code"] == "NOT_CONFIGURED"
+    assert "web.token" in r.json()["detail"] and "chmod 600" in r.json()["detail"]
+
+
 def test_web_returns_503_with_start_hint_when_daemon_is_down(settings, d):
     down = DownClient(settings.data_dir)
     c = TestClient(make_app(d, settings, down), base_url="http://127.0.0.1")

@@ -2,8 +2,10 @@
 
 Creating a grant, approving an agent's request and removing an Item as `cli` or `web` need
 Touch ID, or the login password when Touch ID is unavailable (`deps.presence_gate`). On Linux
-and Windows there is no check yet: the operations proceed and are audited as unsupported.
-Nothing switches the check off; tests give the daemon a fake checker instead.
+and Windows there is no check yet: `cli` operations proceed and are audited as unsupported,
+and `web` ones are refused (a browser session is weaker than a terminal at hand). A checker
+that raises refuses the operation and is audited as `presence=error`. Nothing switches the
+check off; tests give the daemon a fake checker instead.
 """
 
 from __future__ import annotations

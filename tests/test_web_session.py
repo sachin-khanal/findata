@@ -239,6 +239,27 @@ def test_serve_web_prints_the_launch_link_and_open_opens_it(settings, monkeypatc
     assert opened == [link]
 
 
+@pytest.mark.parametrize(
+    "host",
+    ["0.0.0.0", "::", "192.168.1.5", "example.com"],  # noqa: S104 - hosts that must be refused
+)
+def test_serve_web_refuses_a_non_loopback_host_before_binding(host, settings, monkeypatch):
+    from typer.testing import CliRunner
+
+    from findata import cli
+    from findata.web import app as web_app
+
+    monkeypatch.setenv("FINDATA_DATA_DIR", str(settings.data_dir))
+    monkeypatch.setenv("FINDATA_HOST", host)
+    bound: list = []
+    monkeypatch.setattr(web_app, "WebServer", lambda *a, **kw: bound.append(kw))
+
+    r = CliRunner().invoke(cli.app, ["serve", "web"])
+    assert r.exit_code == 1
+    assert "127.0.0.1" in r.stderr and host in r.stderr
+    assert bound == [] and "#launch=" not in r.output
+
+
 def test_page_removes_the_launch_secret_from_the_address_bar():
     # The tests do not run the page's JavaScript (R40): check what it is written to do.
     html = files("findata.web").joinpath("index.html").read_text()

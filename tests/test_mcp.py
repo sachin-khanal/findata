@@ -122,6 +122,14 @@ def test_tools_report_daemon_not_running_clearly(d):
         assert "daemon is not running" in text(r) and "findata start" in text(r)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_loose_credential_file_is_a_tool_error_naming_the_file(d):
+    (d.locations.credentials_dir / "mcp.token").chmod(0o644)
+    r = call(mcp_client(d), "get_status")
+    assert r.is_error
+    assert "mcp.token" in text(r) and "chmod 600" in text(r)
+
+
 def test_real_missing_socket_reports_not_running(settings, keys):
     from findata.daemon.auth import CredentialStore
     from findata.locations import Locations
