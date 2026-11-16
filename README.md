@@ -9,8 +9,8 @@ Your access tokens and transaction data stay on your machine and only ever go to
 
 ## Quickstart
 
-Requires macOS or Linux and [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you
-if needed). Windows is not supported.
+Requires a Mac with Apple silicon and [uv](https://docs.astral.sh/uv/) (it installs Python 3.12
+for you if needed). Linux, Intel Macs and Windows are not supported for now.
 
 ```bash
 uv sync
@@ -75,9 +75,9 @@ findata audit                                    # who asked for what, and wheth
   request id, and you run `findata approve <id>`. Then the agent asks again with that id.
 - The web UI has an "Agent access" panel that does the same: grant, revoke and approve.
 
-**Touch ID.** On a Mac, the daemon asks for Touch ID (or your password) before it creates a grant,
+**Touch ID.** The daemon asks for Touch ID (or your password) before it creates a grant,
 approves a request, or removes an Item for you. Read the prompt. It says what you are allowing,
-and a touch without reading approves it. Where the check is not available (Linux today),
+and a touch without reading approves it. Where the check is not available,
 grants and approvals from the web UI are refused. Do them from a terminal. There, an
 agent that can run shell commands as you could also grant itself writes, so run such agents
 sandboxed (see ADR 0004, Residual limits).
@@ -146,8 +146,7 @@ Tests use a fake Plaid gateway, so they need no keys or network access.
 - [ ] Scheduled sync and webhooks, balance refresh (next; they run inside the daemon)
 - [ ] Webhook relay so Plaid can reach the daemon. This is a separate decision, because it sends
       Item metadata to a second party.
-- [ ] Windows support (not supported today: the daemon's event streams and lock do not work
-      there)
+- [ ] Other platforms: Linux, Intel Macs and Windows are not supported today
 - [ ] Dockerfile + reproducible dev container
 - [ ] ML: transaction categorization → anomaly detection → cash-flow forecast, with
       model registry, eval-gated promotion and drift monitoring

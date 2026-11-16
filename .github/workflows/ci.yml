@@ -6,15 +6,9 @@ on:
 
 jobs:
   test:
-    # findata supports macOS and Linux; Windows is not supported (the daemon's event streams
-    # and lock do not work there), so it is not in the matrix.
-    # SQLCipher ships as prebuilt wheels (sqlcipher3); running on every supported OS/arch makes a
-    # missing wheel or a platform-specific keychain/permission bug fail here, not on a user's machine.
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
-    runs-on: ${{ matrix.os }}
+    # findata supports macOS on Apple silicon only for now (macos-latest is an arm64 runner).
+    # Linux, Intel Macs and Windows are not supported and are not tested.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
