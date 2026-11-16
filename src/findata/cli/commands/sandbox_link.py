@@ -1,15 +1,16 @@
-"""`sandbox-link`: link a Plaid Sandbox bank without a browser, then wait for history."""
+"""`sandbox-link`: link a Plaid Sandbox bank without a browser, then wait for history.
+
+The daemon does the work as a job; this command prints the job's events as they arrive.
+"""
 
 from __future__ import annotations
 
 import typer
 
-from findata.cli.output import JsonOpt, emit, plaid_rejected
-from findata.cli.session import connect
-from findata.linking import find_sandbox_item, link_sandbox_item
-from findata.plaid_gateway import PlaidError
-from findata.sync import sync_item
-from findata.waiting import wait_for_history
+from findata.cli import session
+from findata.cli.output import JsonOpt, emit, fail
+from findata.client import DaemonRejected
+from findata.wire import SandboxLinkIn, describe_status
 
 
 def sandbox_link(
@@ -30,101 +31,78 @@ def sandbox_link(
     Exit codes: 0 history fully loaded, 2 linked but still loading when the wait ended
     (run `findata sync` later), 1 error.
     """
-    rt = connect(as_json, need_plaid=True)
-    try:
-        with rt.session_factory() as session:
-            item = None if new else find_sandbox_item(session)
-            if item is not None:
-                emit(
-                    as_json,
-                    f"{item.institution_name} is already linked (item {item.id}); reusing it. "
-                    "Use --new to link another, or `findata items rm` to remove it.",
-                    event="reused",
-                    item_id=item.id,
-                    institution=item.institution_name,
-                )
-            else:
-                emit(
-                    as_json,
-                    f"Linking Plaid Sandbox test user {username!r}…",
-                    event="linking",
-                    username=username,
-                )
-                item = link_sandbox_item(session, rt.gateway, rt.cipher, username)
-                emit(
-                    as_json,
-                    f"Linked {item.institution_name} (item {item.id}).",
-                    event="linked",
-                    item_id=item.id,
-                    institution=item.institution_name,
-                )
-            if not wait:
-                r = sync_item(session, rt.gateway, rt.cipher, item)
-                emit(
-                    as_json,
-                    f"Synced once: +{r.added} transactions. {r.detail}",
-                    event="done",
-                    added=r.added,
-                    status=r.status,
-                    history_complete=r.history_complete,
-                    timed_out=False,
-                )
-                raise typer.Exit(0 if r.history_complete else 2)
-
-            def progress(n, r, elapsed):
-                emit(
-                    as_json,
-                    f"  [{elapsed:5.1f}s] check {n}: +{r.added} new. {r.detail}",
-                    event="poll",
-                    attempt=n,
-                    elapsed_s=round(elapsed, 1),
-                    added=r.added,
-                    status=r.status,
-                    history_complete=r.history_complete,
-                )
-
-            emit(
+    client = session.connect(as_json)
+    body = SandboxLinkIn(username=username, new=new, wait=wait, timeout=timeout, interval=interval)
+    with session.daemon_errors(as_json):
+        try:
+            job_id = client.start_sandbox_link(body)
+        except DaemonRejected as exc:
+            if exc.error_code != "JOB_ALREADY_RUNNING":
+                raise
+            fail(
                 as_json,
-                "Waiting for Plaid to load transaction history "
-                f"(checking every {interval:g}s, up to {timeout:g}s)…",
-                event="waiting",
-                interval_s=interval,
-                timeout_s=timeout,
+                "A sandbox-link or history job is already running (one at a time). Wait for "
+                "it to finish, then run this again.",
+                error_code=exc.error_code,
+                **exc.extra,
             )
-            out = wait_for_history(
-                session,
-                rt.gateway,
-                rt.cipher,
-                item,
-                timeout=timeout,
-                interval=interval,
-                on_poll=progress,
-            )
-    except PlaidError as exc:
-        plaid_rejected(as_json, exc)
-    if out.history_complete:
-        emit(
-            as_json,
-            f"Done: {out.added} transactions loaded in {out.elapsed:.0f}s. "
-            "Next: `findata txns` to list them, or `findata serve` for the web UI.",
-            event="done",
-            added=out.added,
-            status=out.status,
-            history_complete=True,
-            timed_out=False,
-            polls=out.polls,
+        history_complete = False
+        last_elapsed = 0.0
+        for event in client.follow_job(job_id):
+            name = event.get("event")
+            if name == "poll":
+                last_elapsed = event["elapsed_s"]
+            if name == "error":
+                fail(as_json, event["message"], error_code=event["error_code"])
+            if name == "done":
+                history_complete = event["history_complete"]
+                _show_done(as_json, event, wait, last_elapsed)
+            elif name != "job_finished":
+                _show(as_json, event)
+    if not history_complete:
+        raise typer.Exit(2)
+
+
+def _show(as_json: bool, event: dict) -> None:
+    """Print one job event: the same line of text or JSON object the CLI has always shown."""
+    name = event["event"]
+    if name == "reused":
+        human = (
+            f"{event['institution']} is already linked (item {event['item_id']}); reusing it. "
+            "Use --new to link another, or `findata items rm` to remove it."
         )
-        return
-    emit(
-        as_json,
-        f"Linked, but Plaid was still loading history after {out.elapsed:.0f}s "
-        f"({out.added} transactions so far). Nothing is lost: run `findata sync` again in a "
-        "minute or two to fetch the rest.",
-        event="done",
-        added=out.added,
-        status=out.status,
-        history_complete=False,
-        timed_out=True,
-        polls=out.polls,
-    )
-    raise typer.Exit(2)
+    elif name == "linking":
+        human = f"Linking Plaid Sandbox test user {event['username']!r}…"
+    elif name == "linked":
+        human = f"Linked {event['institution']} (item {event['item_id']})."
+    elif name == "waiting":
+        human = (
+            "Waiting for Plaid to load transaction history "
+            f"(checking every {event['interval_s']:g}s, up to {event['timeout_s']:g}s)…"
+        )
+    elif name == "poll":
+        human = (
+            f"  [{event['elapsed_s']:5.1f}s] check {event['attempt']}: +{event['added']} new. "
+            f"{describe_status(event['status'])}"
+        )
+    else:
+        human = name
+    emit(as_json, human, **event)
+
+
+def _show_done(as_json: bool, event: dict, waited: bool, elapsed: float) -> None:
+    added = event["added"]
+    if not waited:
+        human = f"Synced once: +{added} transactions. {describe_status(event['status'])}"
+    elif event["history_complete"]:
+        human = (
+            f"Done: {added} transactions loaded in {elapsed:.0f}s. "
+            "Next: `findata txns` to list them, or `findata serve` for the web UI."
+        )
+    else:
+        human = (
+            f"Linked, but Plaid was still loading history after {elapsed:.0f}s "
+            f"({added} transactions so far). Nothing is lost: run `findata sync` again in a "
+            "minute or two to fetch the rest."
+        )
+    emit(as_json, human, **event)

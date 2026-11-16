@@ -3,14 +3,10 @@
 import json
 
 import pytest
-from typer.testing import CliRunner
 
-from findata import cli
-from findata.config import Settings
-from findata.db import Account, Item, Transaction, make_session_factory
+from findata.db import Account, Item, Transaction, make_engine, make_session_factory
 from findata.linking import link_item
 from findata.plaid_gateway import PlaidError
-from findata.runtime import Runtime
 from findata.sync import HISTORY_COMPLETE, describe_status
 from findata.waiting import wait_for_history
 from tests.conftest import ACCESS_TOKEN, FakeGateway, account, txn
@@ -161,19 +157,33 @@ def test_timeout_while_still_changing_is_not_reported_complete(session, cipher, 
 # ---------- CLI ----------
 
 
+class SwitchableGateway:
+    """Forwards to whichever gateway `holder["gateway"]` holds now, so a test can swap the
+    gateway (or patch a method on it) after the daemon has been built."""
+
+    def __init__(self, holder):
+        self._holder = holder
+
+    def __getattr__(self, name):
+        return getattr(self._holder["gateway"], name)
+
+
 @pytest.fixture
-def run_cli(monkeypatch, engine, cipher, tmp_path):
+def run_cli(cli_against, settings, keys):
+    """The CLI against an in-process daemon whose waits use a fake clock, not real sleeps."""
+    from tests.test_daemon_jobs import _build  # imported here: that module imports this one
+
     clock = Clock()
-    monkeypatch.setattr("findata.waiting.time.sleep", clock.sleep)
-    monkeypatch.setattr("findata.waiting.time.monotonic", clock.monotonic)
     holder = {"gateway": slow_history_gateway()}
-    settings = Settings(findata_data_dir=tmp_path, _env_file=None)
-    monkeypatch.setattr(
-        "findata.runtime.build_runtime",
-        lambda: Runtime(settings, make_session_factory(engine), cipher, holder["gateway"]),
-    )
-    runner = CliRunner()
-    return lambda *args: runner.invoke(cli.app, list(args)), holder
+    d = _build(settings, keys, SwitchableGateway(holder), clock.sleep, clock.monotonic)
+    invoke = cli_against(d.app)
+    return lambda *args: invoke(*args), holder
+
+
+@pytest.fixture
+def engine_of_daemon(settings, keys):
+    """The daemon's own database, opened for the test to look at what the daemon stored."""
+    return make_engine(settings.db_path, keys.db_key)
 
 
 def test_sandbox_link_waits_and_explains(run_cli):
@@ -245,14 +255,15 @@ def test_sandbox_link_plaid_error_is_explicit(run_cli):
     }
 
 
-def test_missing_credentials_say_what_to_do(monkeypatch):
-    def boom():
-        raise RuntimeError("PLAID_CLIENT_ID and PLAID_SECRET are not set. Copy .env.example")
+def test_missing_plaid_keys_say_what_to_do(cli_against, settings, keys):
+    from tests.test_daemon_api import _build  # imported here: avoids a circular import
 
-    monkeypatch.setattr("findata.runtime.build_runtime", boom)
-    r = CliRunner().invoke(cli.app, ["sync", "--json"])
+    unconfigured = settings.model_copy(update={"plaid_client_id": "", "plaid_secret": ""})
+    invoke = cli_against(_build(unconfigured, keys, None).client.app)
+    r = invoke("sync", "--json")
     assert r.exit_code == 1
-    assert json.loads(r.output)["error_code"] == "NOT_CONFIGURED"
+    body = json.loads(r.stdout)
+    assert body["error_code"] == "NOT_CONFIGURED" and "PLAID_CLIENT_ID" in body["message"]
 
 
 def test_sync_command_reports_status_per_item(run_cli):
@@ -266,7 +277,7 @@ def test_sync_command_reports_status_per_item(run_cli):
 # ---------- duplicate guard and item removal ----------
 
 
-def test_sandbox_link_reuses_existing_item_instead_of_duplicating(run_cli, engine):
+def test_sandbox_link_reuses_existing_item_instead_of_duplicating(run_cli, engine_of_daemon):
     invoke, holder = run_cli
     assert "Linked First Platypus Bank" in invoke("sandbox-link", "--interval", "5").output
     holder["gateway"].sync_calls.clear()
@@ -277,11 +288,11 @@ def test_sandbox_link_reuses_existing_item_instead_of_duplicating(run_cli, engin
         "reused",
         "waiting",
     ]
-    with make_session_factory(engine)() as s:
+    with make_session_factory(engine_of_daemon)() as s:
         assert s.query(Item).count() == 1
 
 
-def test_sandbox_link_new_flag_links_another(run_cli, engine):
+def test_sandbox_link_new_flag_links_another(run_cli, engine_of_daemon):
     invoke, holder = run_cli
     invoke("sandbox-link", "--interval", "5")
     # A second Item at Plaid has its own item id and its own accounts/transactions.
@@ -298,11 +309,11 @@ def test_sandbox_link_new_flag_links_another(run_cli, engine):
     holder["gateway"] = second
     r = invoke("sandbox-link", "--new", "--interval", "5")
     assert r.exit_code == 0 and "already linked" not in r.output
-    with make_session_factory(engine)() as s:
+    with make_session_factory(engine_of_daemon)() as s:
         assert s.query(Item).count() == 2
 
 
-def test_items_list_and_rm_revoke_at_plaid_then_delete_locally(run_cli, engine):
+def test_items_list_and_rm_revoke_at_plaid_then_delete_locally(run_cli, engine_of_daemon):
     invoke, holder = run_cli
     invoke("sandbox-link", "--interval", "5")
     listing = invoke("items", "list", "--json")
@@ -313,7 +324,7 @@ def test_items_list_and_rm_revoke_at_plaid_then_delete_locally(run_cli, engine):
     r = invoke("items", "rm", "item_", "--yes")  # unique prefix
     assert r.exit_code == 0 and "Removed" in r.output
     assert holder["gateway"].removed_tokens == [ACCESS_TOKEN]
-    with make_session_factory(engine)() as s:
+    with make_session_factory(engine_of_daemon)() as s:
         assert (s.query(Item).count(), s.query(Account).count(), s.query(Transaction).count()) == (
             0,
             0,
@@ -322,23 +333,23 @@ def test_items_list_and_rm_revoke_at_plaid_then_delete_locally(run_cli, engine):
     assert "No linked items" in invoke("items", "list").output
 
 
-def test_items_rm_keeps_local_data_when_plaid_refuses(run_cli, engine):
+def test_items_rm_keeps_local_data_when_plaid_refuses(run_cli, engine_of_daemon):
     invoke, holder = run_cli
     invoke("sandbox-link", "--interval", "5")
     holder["gateway"].remove_error = PlaidError("RATE_LIMIT_EXCEEDED", "slow down", 429)
     r = invoke("items", "rm", "item_1", "--yes")
     assert r.exit_code == 1 and "Nothing was deleted" in r.output
-    with make_session_factory(engine)() as s:
+    with make_session_factory(engine_of_daemon)() as s:
         assert s.query(Item).count() == 1
     assert invoke("items", "rm", "item_1", "--yes", "--local-only").exit_code == 0
-    with make_session_factory(engine)() as s:
+    with make_session_factory(engine_of_daemon)() as s:
         assert s.query(Item).count() == 0
 
 
-def test_items_rm_treats_item_not_found_as_already_revoked(run_cli, engine):
+def test_items_rm_treats_item_not_found_as_already_revoked(run_cli, engine_of_daemon):
     invoke, holder = run_cli
     invoke("sandbox-link", "--interval", "5")
     holder["gateway"].remove_error = PlaidError("ITEM_NOT_FOUND", "gone", 400)
     assert invoke("items", "rm", "item_1", "--yes").exit_code == 0
-    with make_session_factory(engine)() as s:
+    with make_session_factory(engine_of_daemon)() as s:
         assert s.query(Item).count() == 0

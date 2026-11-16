@@ -14,7 +14,6 @@ from findata.security import (
     Keys,
     keychain,
     load_keys,
-    load_or_create_api_token,
     load_or_create_master_key,
 )
 
@@ -168,12 +167,6 @@ def test_keychain_backend_fails_loudly_without_keychain(settings, monkeypatch):
 
 
 # ---------- whole-database encryption ----------
-
-
-def test_api_token_is_stable(tmp_path):
-    p = tmp_path / "api.token"
-    assert load_or_create_api_token(p) == load_or_create_api_token(p)
-    assert len(load_or_create_api_token(p)) >= 40
 
 
 def test_database_file_is_encrypted_on_disk(tmp_path):

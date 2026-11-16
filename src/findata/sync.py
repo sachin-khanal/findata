@@ -23,24 +23,12 @@ from findata.contexts import raw_context, token_context
 from findata.db import Account, Item, Transaction
 from findata.plaid_gateway import PlaidError, PlaidGateway
 from findata.security import FieldCipher
+from findata.wire import HISTORY_COMPLETE, describe_status
 
 log = logging.getLogger(__name__)
 
 MUTATION_ERROR = "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION"
 MAX_RESTARTS = 3
-HISTORY_COMPLETE = "HISTORICAL_UPDATE_COMPLETE"
-
-_STATUS_TEXT = {
-    None: "Plaid has not reported a status yet.",
-    "NOT_READY": "Plaid is still preparing this account's transactions.",
-    "INITIAL_UPDATE_COMPLETE": "Recent transactions are loaded; older history is still loading.",
-    HISTORY_COMPLETE: "All available history is loaded.",
-}
-
-
-def describe_status(status: str | None) -> str:
-    """Plain-language meaning of Plaid's transactions_update_status."""
-    return _STATUS_TEXT.get(status, f"Plaid reported status {status}.")
 
 
 @dataclass

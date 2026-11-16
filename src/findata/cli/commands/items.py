@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import typer
 
-from findata import queries
-from findata.cli.output import JsonOpt, emit, fail, plaid_rejected
-from findata.cli.session import connect
-from findata.linking import remove_item
-from findata.plaid_gateway import PlaidError
+from findata.cli import session
+from findata.cli.output import JsonOpt, emit, fail
+from findata.client import DaemonClient
 
 app = typer.Typer(no_args_is_help=True, help="List and remove linked bank connections.")
 
@@ -16,24 +14,39 @@ app = typer.Typer(no_args_is_help=True, help="List and remove linked bank connec
 @app.command("list")
 def items_list(as_json: bool = JsonOpt) -> None:
     """Show linked items with their account and transaction counts."""
-    rt = connect(as_json)
-    with rt.session_factory() as session:
-        summaries = queries.list_item_summaries(session)
-    if not summaries:
+    client = session.connect(as_json)
+    with session.daemon_errors(as_json):
+        items = client.items()
+    if not items:
         emit(as_json, "No linked items.", event="items", items=[])
         return
-    for s in summaries:
-        item = s.item
+    for item in items:
         emit(
             as_json,
             f"{item.id}  {item.institution_name or '-'}  "
-            f"{s.accounts} accounts, {s.transactions} transactions",
+            f"{item.accounts} accounts, {item.transactions} transactions",
             event="item",
             item_id=item.id,
             institution=item.institution_name,
-            accounts=s.accounts,
-            transactions=s.transactions,
+            accounts=item.accounts,
+            transactions=item.transactions,
         )
+
+
+def _find_item(client: DaemonClient, prefix: str, as_json: bool):
+    """The one linked item whose id starts with `prefix`; fails if none or several do."""
+    with session.daemon_errors(as_json):
+        matches = [i for i in client.items() if i.id.startswith(prefix)]
+    if len(matches) != 1:
+        fail(
+            as_json,
+            f"{len(matches)} items match {prefix!r}; run `findata items list` and use a "
+            "unique id prefix."
+            if matches
+            else f"No item matches {prefix!r}.",
+            error_code="NO_UNIQUE_MATCH",
+        )
+    return matches[0]
 
 
 @app.command("rm")
@@ -46,36 +59,17 @@ def items_rm(
     as_json: bool = JsonOpt,
 ) -> None:
     """Revoke an item at Plaid (/item/remove) and delete it and its data locally."""
-    rt = connect(as_json, need_plaid=not local_only)
-    with rt.session_factory() as session:
-        matches = queries.find_items_by_prefix(session, item_id)
-        if len(matches) != 1:
-            fail(
-                as_json,
-                f"{len(matches)} items match {item_id!r}; run `findata items list` and use a "
-                "unique id prefix."
-                if matches
-                else f"No item matches {item_id!r}.",
-                error_code="NO_UNIQUE_MATCH",
-            )
-        item = matches[0]
-        if not yes and not as_json:
-            typer.confirm(
-                f"Remove {item.institution_name} ({item.id}) and all its local data?", abort=True
-            )
-        try:
-            remove_item(
-                session,
-                None if local_only else rt.gateway,
-                rt.cipher,
-                item,
-                local_only=local_only,
-            )
-        except PlaidError as exc:
-            plaid_rejected(
-                as_json,
-                exc,
-                "the removal",
-                ". Nothing was deleted locally; fix the cause or retry with --local-only.",
-            )
+    client = session.connect(as_json)
+    item = _find_item(client, item_id, as_json)
+    if not yes and not as_json:
+        typer.confirm(
+            f"Remove {item.institution_name} ({item.id}) and all its local data?", abort=True
+        )
+    session.announce_presence_prompt()
+    with session.daemon_errors(
+        as_json,
+        what="the removal",
+        plaid_suffix=". Nothing was deleted locally; fix the cause or retry with --local-only.",
+    ):
+        client.remove_item(item.id, local_only=local_only)
     emit(as_json, f"Removed {item_id}.", event="removed", item_id=item_id)

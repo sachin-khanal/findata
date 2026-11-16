@@ -6,9 +6,8 @@ import json
 
 import typer
 
-from findata import queries
+from findata.cli import session
 from findata.cli.output import JsonOpt
-from findata.cli.session import connect
 
 
 def txns(
@@ -16,9 +15,9 @@ def txns(
     as_json: bool = JsonOpt,
 ) -> None:
     """Print recent transactions."""
-    rt = connect(as_json)
-    with rt.session_factory() as session:
-        rows = queries.list_transactions(session, limit=limit)
+    client = session.connect(as_json)
+    with session.daemon_errors(as_json):
+        rows = client.transactions(limit=limit)
     if as_json:
         for t in rows:
             typer.echo(

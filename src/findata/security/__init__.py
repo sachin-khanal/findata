@@ -12,7 +12,7 @@ Encryption is layered, all derived from one random 256-bit master key:
 All primitives come from `cryptography` and SQLCipher; nothing here implements a cipher.
 
 Submodules, one concern each: `files` (owner-only files), `cipher` (AES-GCM), `keys` (HKDF),
-`keychain` (OS keychain), `masterkey` (find/create the master key), `token` (API token).
+`keychain` (OS keychain), `masterkey` (find/create the master key).
 """
 
 from findata.security.cipher import FieldCipher
@@ -25,7 +25,6 @@ from findata.security.files import (
 from findata.security.keychain import KeychainUnavailableError
 from findata.security.keys import Keys, load_keys
 from findata.security.masterkey import load_or_create_master_key
-from findata.security.token import load_or_create_api_token
 
 __all__ = [
     "FieldCipher",
@@ -34,7 +33,6 @@ __all__ = [
     "create_private_file",
     "ensure_private_dir",
     "load_keys",
-    "load_or_create_api_token",
     "load_or_create_master_key",
     "load_or_create_secret",
     "read_secret_file",
