@@ -36,14 +36,8 @@ def _tool_error(exc: DaemonClientError) -> ToolError:
     if isinstance(exc, DaemonTimeout):
         return ToolError(TIMED_OUT)
     if isinstance(exc, DaemonRejected):
-        message = f"{exc.error_code}: {exc.detail}"
-        request_id = exc.extra.get("request_id")
-        if exc.error_code == "CONFIRMATION_REQUIRED" and request_id:
-            message += (
-                f" Ask the user to run `findata approve {request_id}`, then call "
-                f"remove_item again with request_id={request_id}."
-            )
-        return ToolError(message)
+        # The daemon's detail already says what to ask the user for (grant, approve, request id).
+        return ToolError(f"{exc.error_code}: {exc.detail}")
     return ToolError(str(exc))
 
 

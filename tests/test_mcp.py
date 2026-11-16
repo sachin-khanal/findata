@@ -99,6 +99,8 @@ def test_remove_item_returns_request_id_then_needs_human_approval(d):
     rid = d.approvals.pending()[0]["request_id"]
     assert rid in text(first) and f"findata approve {rid}" in text(first)
     assert "request_id" in text(first)
+    # The daemon's detail already tells the agent what to ask for: it is said once.
+    assert text(first).count(f"findata approve {rid}") == 1
     # Still unapproved: retrying with the id does not remove anything.
     assert call(c, "remove_item", item_id="item_1", request_id=rid).is_error
     assert [i.id for i in c.items()] == ["item_1"]
