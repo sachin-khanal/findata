@@ -10,10 +10,11 @@ need to create or activate a virtualenv by hand.
 
 1. PREREQUISITES
 ----------------
+- A Mac with Apple silicon. Linux, Intel Macs and Windows are not supported for now.
 - uv (https://docs.astral.sh/uv/). It installs Python 3.12 for you if needed.
 - git
 - Nothing else to install: SQLCipher (sqlcipher3) and keychain access (keyring) come as
-  prebuilt wheels for macOS and Linux on x86-64 and arm64. Windows is not supported.
+  prebuilt wheels.
 - Free Plaid Sandbox keys: https://dashboard.plaid.com/developers/keys
   (only needed to talk to Plaid; the test suite needs no keys or network)
 
@@ -112,8 +113,7 @@ Background mode:
   uv run findata start --background   # returns once the daemon is ready
   uv run findata stop                 # stops it, background or not
 Output of a background daemon is appended to ~/.findata/daemon.log (owner-only).
-Read it when a start fails; the command also prints the last lines. Background
-start is POSIX only (macOS, Linux). Add --wait-timeout <seconds> if the daemon
+Read it when a start fails; the command also prints the last lines. Add --wait-timeout <seconds> if the daemon
 takes longer than 30 seconds to become ready.
 
 Credentials. "findata init" (or the first "findata start") creates
@@ -133,9 +133,9 @@ Grants and approvals. The agent cannot write until you allow it:
 Defaults: --ops sync, --for 15m; the longest grant is 24h. Grants expire on their
 own and are cleared when the daemon stops. An agent removal also needs a fresh
 approval each time. The web UI has an "Agent access" panel for the same actions.
-On macOS the daemon asks for Touch ID (or the password) before a grant, an
-approval, or a removal by cli/web; read the prompt. Where there is no such check
-(Linux) web grants and approvals are refused: use the terminal.
+The daemon asks for Touch ID (or the password) before a grant, an
+approval, or a removal by cli/web; read the prompt. Where that check is not
+available, web grants and approvals are refused: use the terminal.
 Design and limits: docs/adr/0004-daemon-centred-architecture.md
 
 Every command explains what it is doing and what to do next. For scripts, CI and
