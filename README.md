@@ -9,7 +9,8 @@ Your access tokens and transaction data stay on your machine and only ever go to
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you if needed).
+Requires macOS or Linux and [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you
+if needed). Windows is not supported.
 
 ```bash
 uv sync
@@ -22,7 +23,7 @@ Get Sandbox keys at <https://dashboard.plaid.com/developers/keys>.
 
 The daemon is the one program that holds your keys and your data. Everything else asks it.
 Leave it running and open a second terminal. To run it without holding a terminal, use
-`uv run findata start --background` (macOS and Linux). It logs to `~/.findata/daemon.log`, and
+`uv run findata start --background`. It logs to `~/.findata/daemon.log`, and
 `findata stop` stops it either way.
 
 In the second terminal:
@@ -76,8 +77,8 @@ findata audit                                    # who asked for what, and wheth
 
 **Touch ID.** On a Mac, the daemon asks for Touch ID (or your password) before it creates a grant,
 approves a request, or removes an Item for you. Read the prompt. It says what you are allowing,
-and a touch without reading approves it. Where the check is not available (Linux and Windows
-today), grants and approvals from the web UI are refused. Do them from a terminal. There, an
+and a touch without reading approves it. Where the check is not available (Linux today),
+grants and approvals from the web UI are refused. Do them from a terminal. There, an
 agent that can run shell commands as you could also grant itself writes, so run such agents
 sandboxed (see ADR 0004, Residual limits).
 
@@ -145,7 +146,8 @@ Tests use a fake Plaid gateway, so they need no keys or network access.
 - [ ] Scheduled sync and webhooks, balance refresh (next; they run inside the daemon)
 - [ ] Webhook relay so Plaid can reach the daemon. This is a separate decision, because it sends
       Item metadata to a second party.
-- [ ] `start --background` on Windows
+- [ ] Windows support (not supported today: the daemon's event streams and lock do not work
+      there)
 - [ ] Dockerfile + reproducible dev container
 - [ ] ML: transaction categorization → anomaly detection → cash-flow forecast, with
       model registry, eval-gated promotion and drift monitoring

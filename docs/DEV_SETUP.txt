@@ -13,7 +13,7 @@ need to create or activate a virtualenv by hand.
 - uv (https://docs.astral.sh/uv/). It installs Python 3.12 for you if needed.
 - git
 - Nothing else to install: SQLCipher (sqlcipher3) and keychain access (keyring) come as
-  prebuilt wheels for macOS, Linux and Windows on x86-64 and arm64.
+  prebuilt wheels for macOS and Linux on x86-64 and arm64. Windows is not supported.
 - Free Plaid Sandbox keys: https://dashboard.plaid.com/developers/keys
   (only needed to talk to Plaid; the test suite needs no keys or network)
 
@@ -59,8 +59,7 @@ load them.
   daemon.lock, daemon.pid   one daemon per data directory (only while it runs)
   daemon.log    output of "findata start --background" (see section 5)
 
-The data directory must be mode 0700 and the files 0600 (POSIX; on Windows the
-per-user profile ACL applies). findata refuses to start if they are accessible to
+The data directory must be mode 0700 and the files 0600. findata refuses to start if they are accessible to
 others (fix with: chmod 700 <dir> / chmod 600 <file>).
 
 The master key protects everything. If it is lost, the database cannot be
@@ -136,7 +135,7 @@ own and are cleared when the daemon stops. An agent removal also needs a fresh
 approval each time. The web UI has an "Agent access" panel for the same actions.
 On macOS the daemon asks for Touch ID (or the password) before a grant, an
 approval, or a removal by cli/web; read the prompt. Where there is no such check
-(Linux, Windows) web grants and approvals are refused: use the terminal.
+(Linux) web grants and approvals are refused: use the terminal.
 Design and limits: docs/adr/0004-daemon-centred-architecture.md
 
 Every command explains what it is doing and what to do next. For scripts, CI and
