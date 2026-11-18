@@ -69,7 +69,7 @@ class JobManager:
         hold that key: the check and the reservation are one atomic step, else JobAlreadyRunning.
         `labels` (ids and names only) go into the job's `job_started` and `job_finished` events.
         """
-        job = _Job(secrets.token_urlsafe(8), exclusive, labels)
+        job = _Job(secrets.token_hex(8), exclusive, labels)  # hex: never starts with "-"
         with self._lock:
             if exclusive is not None and exclusive in self._exclusive:
                 raise JobAlreadyRunning(self._exclusive[exclusive])
