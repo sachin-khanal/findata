@@ -97,7 +97,7 @@ def _show_done(as_json: bool, event: dict, waited: bool, elapsed: float) -> None
     elif event["history_complete"]:
         human = (
             f"Done: {added} transactions loaded in {elapsed:.0f}s. "
-            "Next: `findata txns` to list them, or `findata serve` for the web UI."
+            "Next: `findata txns` to list them, or `findata serve web` for the web UI."
         )
     else:
         human = (
