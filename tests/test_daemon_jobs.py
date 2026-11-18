@@ -324,3 +324,15 @@ def test_manager_evicts_oldest_finished_job_beyond_the_bound():
     with pytest.raises(KeyError):
         jm.get(ids[0])
     assert jm.get(ids[-1]).result == {"i": 4}
+
+
+def test_job_ids_never_start_with_a_dash(monkeypatch):
+    # A CLI reads a dash-first argument as an option, so job ids are hex like request ids.
+    # Force the URL-safe source to return such a token: a hex id never comes from it.
+    import secrets
+
+    monkeypatch.setattr(secrets, "token_urlsafe", lambda nbytes: "-" + "x" * 10)
+    jm = JobManager()
+    ids = [jm.start(lambda emit: {}) for _ in range(20)]
+    assert len(set(ids)) == len(ids)
+    assert all(len(i) == 16 and int(i, 16) >= 0 for i in ids)
