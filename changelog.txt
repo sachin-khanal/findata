@@ -83,6 +83,8 @@ b7367da  2026-11-16  [main]  Merge feature/daemon-architecture into main (PR #2)
 bc84000  2026-11-16  [main]  Merge refactor/macos-only into main: macOS on Apple silicon is the only supported platform for now.
 f68a483  2026-11-17  [fix/job-ids-hex]  Job ids are token_hex(8) (16 hex characters) like approval request ids, so none starts with "-", with a unit test.
 a8ad291  2026-11-17  [main]  Merge fix/job-ids-hex into main: hex job ids that never start with a dash.
+3f945a4  2026-11-17  [fix/cli-serve-hints]  Update stale `findata serve` hints in `sandbox-link` and `sync` to `findata serve web`, with CLI test assertions.
+b8731f0  2026-11-17  [main]  Merge fix/cli-serve-hints into main: point CLI web UI hints at `findata serve web`.
 
 Uncommitted changes: none.
-Branch notes: fix/cli-serve-hints updates stale `findata serve` next-step hints in sandbox-link and sync to `findata serve web`.
+Branch notes: design/job-shutdown adds the M4 design spec (docs/superpowers/specs/2026-11-17-job-shutdown-design.md) for stopping running jobs cleanly on daemon shutdown.
