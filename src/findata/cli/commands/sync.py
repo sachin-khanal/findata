@@ -15,7 +15,7 @@ def sync(as_json: bool = JsonOpt) -> None:
         emit(
             as_json,
             "No linked items yet. Run `findata sandbox-link` or link one in the "
-            "web UI (`findata serve`).",
+            "web UI (`findata serve web`).",
             event="synced",
             items=[],
         )

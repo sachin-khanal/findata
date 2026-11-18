@@ -193,7 +193,7 @@ def test_sandbox_link_waits_and_explains(run_cli):
     assert "Linked First Platypus Bank" in r.output
     assert "older history is still loading" in r.output  # explicit, not a silent +0
     assert "Done: 2 transactions loaded" in r.output
-    assert "findata txns" in r.output  # tells the user what to do next
+    assert "findata txns" in r.output and "findata serve web" in r.output
 
 
 def test_sandbox_link_json_is_one_event_per_line(run_cli):
@@ -268,7 +268,8 @@ def test_missing_plaid_keys_say_what_to_do(cli_against, settings, keys):
 
 def test_sync_command_reports_status_per_item(run_cli):
     invoke, _ = run_cli
-    assert "No linked items yet" in invoke("sync").output
+    empty = invoke("sync").output
+    assert "No linked items yet" in empty and "findata serve web" in empty
     invoke("sandbox-link", "--interval", "5")
     r = invoke("sync")
     assert "All available history is loaded." in r.output

@@ -81,6 +81,8 @@ ceb01fc  2026-11-16  [feature/daemon-architecture]  Drop Windows: CI matrix is m
 b7367da  2026-11-16  [main]  Merge feature/daemon-architecture into main (PR #2): the daemon owns the keys and data, CLI, web and MCP are its clients, agent writes need a Touch ID gated grant and per-removal approval; merged after the hands-on Touch ID session passed; Windows dropped.
 96eeae7  2026-11-16  [refactor/macos-only]  Support macOS on Apple silicon only for now: CI runs macos-latest alone (Linux and Intel Mac jobs removed), README and DEV_SETUP say Linux, Intel Macs and Windows are not supported; the cross-platform code paths stay in place; the user's decision
 bc84000  2026-11-16  [main]  Merge refactor/macos-only into main: macOS on Apple silicon is the only supported platform for now.
+f68a483  2026-11-17  [fix/job-ids-hex]  Job ids are token_hex(8) (16 hex characters) like approval request ids, so none starts with "-", with a unit test.
+a8ad291  2026-11-17  [main]  Merge fix/job-ids-hex into main: hex job ids that never start with a dash.
 
 Uncommitted changes: none.
-Branch notes: fix/job-ids-hex switches daemon job ids from token_urlsafe(8) to token_hex(8) so none starts with "-"; M4 job shutdown awaits design.
+Branch notes: fix/cli-serve-hints updates stale `findata serve` next-step hints in sandbox-link and sync to `findata serve web`.
