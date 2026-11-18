@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-21-daemon-architecture-design.md`
 
+**Status:** Complete — merged into `main` in PR #2 (`b7367da`, 2026-11-16) after whole-branch review fixes (`42dbd12`), the hands-on Touch ID verification session (`60154c4`), and dropping Windows (`ceb01fc`), followed by narrowing supported platforms to macOS on Apple silicon for now (`96eeae7`, merged `bc84000`). Final decisions and residual limits live in [ADR 0004](../../adr/0004-daemon-centred-architecture.md). Worktree SDD notes (`progress.md`, briefs, reports, rulings R1–R60) were archived to `~/.findata-notes/2026-10-21-daemon-architecture/` when `~/.worktrees/findata-daemon` was removed on 2026-11-17. Deferred follow-ups: hex job IDs (`fix/job-ids-hex`, merged) and draining running jobs on shutdown (M4, designed in `docs/superpowers/specs/2026-11-17-job-shutdown-design.md`).
+
 ## Global Constraints
 
 - Works on macOS, Linux and Windows (ADR 0002); macOS and Linux first, loopback with the same credentials is the acceptable Windows fallback.

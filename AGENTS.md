@@ -39,13 +39,18 @@ footer lines (`Uncommitted changes`, `Branch notes`) true.
   `tmux new-session -d -s findata-<name> -c <repo>`, then open it with
   `osascript -e 'tell application "Terminal" to do script "tmux attach -t findata-<name>"'`.
   Quick read-only commands can run directly.
+- Read output from your `findata-*` tmux panes yourself (`tmux capture-pane -p`) alongside the
+  daemon and audit logs instead of asking the user to paste terminal output. Ask the user only
+  for what requires a person off-screen (such as touching or cancelling the macOS Touch ID prompt).
 - **Clean up when the task ends:** stop every process you started and `tmux kill-session` each
   `findata-*` session you created.
 
 ## Multi-task builds
 
-A plan in `docs/superpowers/plans/` is built task by task: tick its checkboxes as tasks
-finish. Working notes (briefs, reports, rulings, review diffs) live in
-`.superpowers/sdd/<plan>/progress.md` inside the worktree, which is git-ignored. Record the
-outcome of every agent you dispatch there; a dispatch with no recorded outcome is unfinished
-work.
+Design specs live in `docs/superpowers/specs/` and implementation plans in
+`docs/superpowers/plans/`. A plan is built task by task: tick its checkboxes as tasks finish.
+Working notes (briefs, reports, rulings, review diffs) live in
+`.superpowers/sdd/<plan>/progress.md` inside the worktree, which is git-ignored; archive that
+folder to `~/.findata-notes/<plan>/` before removing a worktree (`git worktree remove`) so the
+record is not lost. Record the outcome of every agent you dispatch there; a dispatch with no
+recorded outcome is unfinished work.

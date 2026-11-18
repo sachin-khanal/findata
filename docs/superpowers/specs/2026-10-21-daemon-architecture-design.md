@@ -1,7 +1,7 @@
 # findata: daemon-centred architecture
 
-- **Status:** Draft for approval
-- **Date:** 2026-10-21
+- **Status:** Implemented and merged (PR #2, `b7367da`, 2026-11-16); final architecture and limits recorded in [ADR 0004](../../adr/0004-daemon-centred-architecture.md). Supported platform narrowed to macOS on Apple silicon for now (`bc84000`).
+- **Date:** 2026-10-21 (updated through 2026-11-17)
 
 ## Intent
 
@@ -90,7 +90,9 @@ stopped).
   result, time. No transaction data or secrets. *(My call: a table added through migration
   0002.)*
 - `findata stop` and `findata status` talk to the daemon. A stop mid-sync must not corrupt
-  anything; the cursor is already committed atomically with the data.
+  anything; the cursor is already committed atomically with the data. *(Follow-up M4: cleanly
+  stopping or draining running `sandbox-link` and `history` jobs on shutdown is designed in
+  [2026-11-17-job-shutdown-design.md](2026-11-17-job-shutdown-design.md).)*
 
 ### Authentication and roles
 
@@ -136,10 +138,11 @@ authority, and the limits of that protection are documented.
   contains secrets or transaction data.
 - **A cancelled, failed or timed-out prompt refuses the operation** with
   `USER_PRESENCE_REQUIRED` and changes nothing. The outcome of every check is audited.
-- **Where no prompt is possible** *(builder's call):* on macOS without a login session that can
-  show one (for example over SSH) the operation is refused with a message saying so. On Linux
-  and Windows, which have no equivalent here yet, the operations are allowed and the daemon
-  reports and audits presence as unsupported.
+- **Where no prompt is possible** *(builder's call; refined in Task 11, `85382d8`):* on macOS
+  without a login session that can show one (for example over SSH) the operation is refused in
+  both CLI and web with a message saying so. On Linux and Windows, which have no equivalent here
+  yet (and were dropped from supported platforms for now in `ceb01fc` / `96eeae7`), web grants
+  and approvals are refused while terminal operations proceed and audit presence as unsupported.
 - **Residual limits, documented in ADR 0004 and the README:** this stops an agent from using
   the CLI or the socket to act with human authority. It does not stop a process that can
   change findata's code, stop the daemon and run its own, or read the user's keychain. Agents

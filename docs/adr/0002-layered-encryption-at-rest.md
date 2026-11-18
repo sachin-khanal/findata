@@ -1,6 +1,6 @@
 # ADR 0002: Layered encryption at rest and master-key storage
 
-- **Status:** Accepted (supersedes the token-encryption and key-file parts of ADR 0001)
+- **Status:** Accepted (supersedes the token-encryption and key-file parts of [ADR 0001](0001-local-first-storage-and-secrets.md); platform support later narrowed to macOS on Apple silicon for now — see Consequences)
 - **Date:** 2026-10-12
 
 ## Context
@@ -43,6 +43,8 @@ Linux and Windows on both x86-64 and arm64 without asking users to install syste
   keeps tokens protected in any future export or backup path).
 - Windows has no POSIX permission bits; the permission checks are skipped there and the
   per-user profile ACL is relied on instead.
-- Wheels exist per Python version and platform. CI runs on Linux (x86-64, arm64), macOS (arm64,
-  x86-64) and Windows so a missing wheel fails the build. Linux ppc64le/s390x/armv7l have no
-  `sqlcipher3` wheel.
+- Wheels exist per Python version and platform. *(2026-11-16 update: supported platforms and CI
+  were narrowed to macOS on Apple silicon (`macos-latest`) only for now, while keeping the
+  cross-platform code paths in place; file-backed SQLCipher engines also use `QueuePool` rather
+  than `pysqlcipher`'s default `SingletonThreadPool` so concurrent daemon threads cannot close
+  another thread's active connection.)*

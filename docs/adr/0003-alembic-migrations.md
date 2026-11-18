@@ -1,6 +1,6 @@
 # ADR 0003: Versioned schema migrations with Alembic
 
-- **Status:** Accepted
+- **Status:** Accepted (process boundary updated by [ADR 0004](0004-daemon-centred-architecture.md))
 - **Date:** 2026-10-21
 
 ## Context
@@ -33,5 +33,8 @@ transaction history.
 
 - Existing databases keep their data across upgrades; the cost is one explicit step
   (`findata migrate`) after pulling a version that changes the schema.
-- Everything that opens the database (CLI, API, future MCP server) gets the same check for
-  free through `build_runtime`.
+- Everything that opens the database gets the same check for free through `build_runtime`.
+  *(Under [ADR 0004](0004-daemon-centred-architecture.md), only the daemon (`findata start`),
+  `findata init` and `findata migrate` open the database; `findata migrate` acquires the
+  per-data-dir daemon lock before loading keys or opening the database and refuses with
+  `DAEMON_RUNNING` while the daemon runs, while `migrate --check` stays read-only and lock-free.)*

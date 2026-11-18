@@ -22,6 +22,8 @@ need to create or activate a virtualenv by hand.
 2. FIRST-TIME SETUP
 -------------------
   uv sync                      # creates .venv from pyproject.toml + uv.lock
+                               # (in a synced ~/Desktop or ~/Documents folder, set
+                               # UV_PROJECT_ENVIRONMENT="$HOME/.venvs/findata" first; see 7b)
   cp .env.example .env         # then edit .env, see section 3
   uv run findata init          # creates ~/.findata (see section 4)
 
@@ -35,19 +37,21 @@ Dependencies are locked in uv.lock. Do not edit it by hand; use "uv add <pkg>"
 Settings load from environment variables and an optional .env file in the
 directory you run from. .env is git-ignored. Never commit it.
 
-  PLAID_CLIENT_ID    from the Plaid dashboard
-  PLAID_SECRET       from the Plaid dashboard (use the Sandbox secret)
-  PLAID_ENV          sandbox (default) or production
-  FINDATA_DATA_DIR   optional, default ~/.findata
+  PLAID_CLIENT_ID      from the Plaid dashboard
+  PLAID_SECRET         from the Plaid dashboard (use the Sandbox secret)
+  PLAID_ENV            sandbox (default) or production
+  PLAID_COUNTRY_CODES  optional, JSON array, default ["US"]
+  FINDATA_DATA_DIR     optional, default ~/.findata
   FINDATA_KEY_BACKEND  optional, auto (default), keychain or file (see section 4)
-  FINDATA_HOST       optional, default 127.0.0.1; used by "findata serve web" only
-  FINDATA_PORT       optional, default 8765; used by "findata serve web" only
+  FINDATA_HOST         optional, default 127.0.0.1; used by "findata serve web" only
+  FINDATA_PORT         optional, default 8765; used by "findata serve web" only
 
 The daemon starts without Plaid keys. Calls that need Plaid fail until they are
 set. FINDATA_HOST must be a loopback address (127.0.0.1, ::1 or localhost):
 "serve web" refuses any other host before it binds.
-Only the daemon reads the Plaid keys. The CLI, "serve web" and "serve mcp" never
-load them.
+Only the daemon (plus "init" and "migrate" for data-dir/key settings) loads
+findata.config.Settings. Front ends (data CLI commands, "serve web" and "serve mcp")
+use ClientSettings and never load Plaid keys.
 
 
 4. LOCAL DATA AND SECRETS (~/.findata)
@@ -59,6 +63,7 @@ load them.
   daemon.sock   the daemon's Unix socket (only while it runs)
   daemon.lock, daemon.pid   one daemon per data directory (only while it runs)
   daemon.log    output of "findata start --background" (see section 5)
+  findata.db.bak-<timestamp>   owner-only backup made before "findata migrate" (see section 8)
 
 The data directory must be mode 0700 and the files 0600. findata refuses to start if they are accessible to
 others (fix with: chmod 700 <dir> / chmod 600 <file>).
@@ -104,10 +109,13 @@ Run the daemon and the front ends in separate terminals:
                                                # (usually 10-30 seconds)
                uv run findata sync             # pull new/changed/removed transactions
                uv run findata txns             # print recent transactions
-               uv run findata status           # daemon version, Plaid env, uptime
+               uv run findata status           # daemon version, Plaid env, schema, uptime, presence
   terminal 3:  uv run findata serve web        # prints "Open findata: <link>"; open it
                                                # (--open does that for you)
-  terminal 4:  uv run findata serve mcp        # normally started by an agent host
+  terminal 4:  uv run findata serve mcp        # normally started by an agent host; exposes
+                                               # read tools (get_status, list_items,
+                                               # list_accounts, list_transactions) and
+                                               # grant-gated write tools (sync, remove_item)
 
 Background mode:
   uv run findata start --background   # returns once the daemon is ready
@@ -133,15 +141,18 @@ Grants and approvals. The agent cannot write until you allow it:
 Defaults: --ops sync, --for 15m; the longest grant is 24h. Grants expire on their
 own and are cleared when the daemon stops. An agent removal also needs a fresh
 approval each time. The web UI has an "Agent access" panel for the same actions.
-The daemon asks for Touch ID (or the password) before a grant, an
-approval, or a removal by cli/web; read the prompt. Where that check is not
-available, web grants and approvals are refused: use the terminal.
+The daemon asks for Touch ID (or the login password) before a grant, an
+approval, or a removal by cli/web; read the prompt. On macOS, a session that
+cannot show the prompt (for example over SSH) refuses both terminal and web
+calls with USER_PRESENCE_REQUIRED: run them from a logged-in session at the Mac.
+(On non-macOS code paths, which have no presence check yet and are not supported,
+web grants and approvals are refused while terminal calls proceed.)
 Design and limits: docs/adr/0004-daemon-centred-architecture.md
 
 Every command explains what it is doing and what to do next. For scripts, CI and
-agents, add --json to sandbox-link, sync, txns or status (and grant, revoke, approve,
-audit, items): output is one JSON object per line ("event": linking, linked,
-waiting, poll, done, error, ...).
+agents, add --json to sandbox-link, sync, txns, status, migrate, grant, revoke,
+approve, audit or items: output is one JSON object per line ("event": linking,
+linked, waiting, poll, done, error, ...).
 
 sandbox-link exit codes: 0 = history fully loaded, 2 = linked but Plaid was still
 loading when the wait ended (nothing lost; run "findata sync" later, or raise
@@ -152,8 +163,10 @@ arrives as HISTORICAL_UPDATE_COMPLETE. "+0 new" with INITIAL_UPDATE_COMPLETE mea
 
 The web API needs a browser session: open the "Open findata: <link>" line that
 "findata serve web" prints. The link carries a one-time-per-run secret in its
-fragment; restarting "serve web" ends all sessions, so open the new link. /api/health
-works without a session.
+fragment, which the page trades at POST /api/session for an HttpOnly SameSite=Strict
+cookie plus a per-port X-Findata-Session request key kept in localStorage; every
+/api data route needs both. Restarting "serve web" ends all sessions, so open the
+new link. /api/health works without a session; interactive /docs are disabled.
 
 
 6. TESTS AND LINTING
@@ -175,20 +188,32 @@ commands locally before opening a PR.
 
 7. CODE LAYOUT
 --------------
-  src/findata/daemon/            the daemon: server.py (findata start), app and routes,
-                                 auth (credentials), grants, presence (Touch ID),
-                                 audit, events, jobs, lock, scheduler
-  src/findata/client/            DaemonClient, the only way front ends reach data
-  src/findata/web/               web front end (app.py, session.py, index.html)
-  src/findata/mcp/server.py      MCP front end
-  src/findata/cli/               "findata" command; commands/ has one file per group
+  src/findata/daemon/            the daemon: server.py (findata start), app.py, deps.py,
+                                 routes/, auth (credentials), grants, presence (Touch ID),
+                                 audit, events (EventBus), jobs, lock, scheduler
+  src/findata/client/            DaemonClient, errors.py and liveness.py: the only way
+                                 front ends reach data
+  src/findata/web/               web front end (app.py, routes.py, deps.py, session.py,
+                                 index.html)
+  src/findata/mcp/server.py      MCP front end (stdio, mcp SDK)
+  src/findata/cli/               "findata" command: commands/ (one file per group),
+                                 background.py (--background spawn), session.py, output.py
   src/findata/wire.py            request/response shapes shared by daemon and clients
-  src/findata/locations.py       where files in the data directory live
-  src/findata/config.py          settings (daemon only)
-  src/findata/security/          master key, key derivation, AES-GCM field encryption
-  src/findata/db.py              SQLAlchemy models and engine
+  src/findata/locations.py       data-dir paths (Locations) and front-end ClientSettings
+  src/findata/privfs.py          owner-only file/dir and secret helpers (no crypto)
+  src/findata/readiness.py       background-start ready pipe protocol and timeout
+  src/findata/config.py          daemon/init/migrate Settings (loads Plaid keys)
+  src/findata/runtime.py         builds shared Runtime (engine, keys, lazy Plaid gateway)
+  src/findata/contexts.py        focused context slices passed into sync/linking/queries
+  src/findata/security/          master key, HKDF derivation, OS keychain, AES-GCM cipher
+  src/findata/db.py              SQLAlchemy models and SQLCipher engine (QueuePool on files)
+  src/findata/schema.py          Alembic runner (ensure_current, upgrade, backup)
+  src/findata/migrations/        versioned schema migrations (0001_baseline, 0002_audit_log)
   src/findata/plaid_gateway.py   the only module that imports plaid-python
+  src/findata/linking.py         public-token exchange, sandbox linking, item removal
   src/findata/sync.py            cursor-based transactions sync
+  src/findata/waiting.py         bounded post-link wait until Plaid history settles
+  src/findata/queries.py         read queries for items, accounts and filtered transactions
   tests/                         pytest suite (conftest.py has the fake gateway)
 
 Core modules (db, security, plaid_gateway, sync, linking, waiting, queries, schema,
@@ -226,9 +251,9 @@ call the alembic CLI: the database is SQLCipher-encrypted, so everything goes th
   * There is no `downgrade` command: restore the backup copy instead.
 
 Changing the schema: edit the model in src/findata/db.py, then add the next file under
-src/findata/migrations/versions by hand (copy 0001's header; revision "0002", down_revision
-"0001"; use op.batch_alter_table for ALTERs). tests/test_schema.py fails if the models and
-the migrations disagree, so a forgotten migration is caught in CI.
+src/findata/migrations/versions by hand (copy 0002_audit_log.py's header; revision "0003",
+down_revision "0002"; use op.batch_alter_table for ALTERs). tests/test_schema.py fails if the
+models and the migrations disagree, so a forgotten migration is caught in CI.
 
 9. NOT USED YET
 ---------------
