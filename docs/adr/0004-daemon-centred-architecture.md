@@ -1,7 +1,7 @@
 # ADR 0004: A daemon owns the data; everything else is a front end
 
-- **Status:** Accepted
-- **Date:** 2026-11-05
+- **Status:** Accepted (merged `b7367da`, 2026-11-16; supported platform narrowed to macOS on Apple silicon for now in `bc84000`)
+- **Date:** 2026-11-05 (updated 2026-11-17)
 
 ## Context
 
@@ -33,7 +33,9 @@ decisions and the limits.
   `waiting`, `queries`, `schema`, `runtime`, `contexts`, `config`), at any depth, and checks
   that `import findata.cli` loads none of them. Only `cli/commands/daemon.py`, `setup.py` and
   `migrate.py` are exempt; they run or set up the core and import it inside their functions.
-  `tests/test_daemon_e2e.py` runs a real daemon on a real socket.
+  `findata migrate` takes the per-data-dir daemon lock before loading keys or opening the
+  database and refuses (`DAEMON_RUNNING`) while a daemon holds it (`migrate --check` stays
+  read-only and lock-free). `tests/test_daemon_e2e.py` runs a real daemon on a real socket.
 
 ### Roles, grants and approvals
 
@@ -60,16 +62,19 @@ request, and removing an Item as `cli` or `web`.
 
 - On macOS this is Touch ID, or the login password when Touch ID is unavailable. The prompt
   names what is being allowed. A cancelled, failed or timed-out prompt refuses the operation
-  with `USER_PRESENCE_REQUIRED` and changes nothing.
-- Where there is no presence check (Linux and Windows today), grants and approvals made from the
-  web UI are refused and must be done from a terminal. A browser session is weaker than a
-  terminal the user is sitting at, so it must not be the only thing between an agent and a
-  write. Terminal grants are allowed and the daemon reports presence as unsupported.
+  with `USER_PRESENCE_REQUIRED` and changes nothing. A macOS session that cannot show the
+  prompt (for example over SSH) refuses both `cli` and `web` with `USER_PRESENCE_REQUIRED`.
+- On platforms without a presence check (Linux and Windows code paths, which are not supported
+  today), grants and approvals made from the web UI are refused and must be done from a
+  terminal. A browser session is weaker than a terminal the user is sitting at, so it must not
+  be the only thing between an agent and a write. Terminal grants are allowed there and the
+  daemon reports presence as unsupported.
 
 ### Events, not polling
 
 The daemon pushes events as NDJSON (`GET /v1/events` for the daemon, `GET /v1/jobs/{id}/events`
-for one job) instead of clients asking on a timer. An idle stream carries only keep-alive lines.
+for one job; at most 32 open streams, with `mcp` capped at 8 so an agent cannot starve human
+clients) instead of clients asking on a timer. An idle stream carries only keep-alive lines.
 A grant's expiry is a timer inside the daemon, and a job ends with a signal. The web server
 relays the events to the page.
 
@@ -100,14 +105,17 @@ who asks for `/`, so the page carries none.
 ### Smaller decisions
 
 - `start --background` learns that the daemon is ready from a pipe the child writes to once it
-  is listening, not by probing it. It is POSIX-only for now; Windows is on the roadmap.
-- `/docs` (Swagger UI) is dropped from the web server: it would run third-party code on the
-  page's own origin.
+  is listening, not by probing it (POSIX-only).
+- File-backed SQLCipher engines use `QueuePool` instead of `pysqlcipher`'s default
+  `SingletonThreadPool`, which closed active connections across threads once more than five
+  threads connected.
+- `/docs` (Swagger UI), `/redoc` and `/openapi.json` are dropped from the web server: Swagger UI
+  would run third-party code on the page's own origin.
 - Every response from the web server sets `Content-Security-Policy: frame-ancestors 'none'` and
   `X-Frame-Options: DENY`. A page on another 127.0.0.1 port is same-site, so it could otherwise
   frame the page together with its cookie and trick clicks.
-- Request ids for approvals never start with `-`, so `findata approve <id>` never reads an id as
-  an option.
+- Request ids for approvals and job ids use `token_hex(8)` so no id starts with `-` and CLI
+  commands never read an id as an option.
 
 ## Residual limits
 
@@ -119,20 +127,26 @@ authority. It does not make a hostile process safe.
   trusted that far must run sandboxed, without access to `~/.findata` or the findata source.
 - **Touch ID protects only if the person reads the prompt.** The prompt names what is being
   allowed, but a reflexive touch approves it.
-- **`--open` can expose the launch link.** On Linux, or with `$BROWSER` set, the link is passed
-  to the browser in its arguments, where other accounts can see it with `ps`. macOS passes it on
-  stdin. If that matters, copy the printed link by hand instead.
+- **`--open` can expose the launch link with `$BROWSER` set.** On macOS, `webbrowser.open` passes
+  the link to `osascript` on stdin; with `$BROWSER` set (or on Linux), the link is passed in the
+  browser's process arguments, where other accounts can see it with `ps`. If that matters, copy
+  the printed link by hand instead.
 - **Another local account can overwrite the session cookie**, which logs the user out. It
   cannot read the cookie.
-- **Linux and Windows have no presence check yet.** Web grants and approvals are refused there;
-  terminal grants are not confirmed by the user. So on those platforms an agent with a shell as
-  the user can read `credentials/cli.token` or run `findata grant` and give itself writes:
-  such agents must run sandboxed there.
-- **Windows is untested.** There the daemon falls back to loopback TCP with the same
-  credentials, protected only by file ACLs on the data directory. The port is recorded in
-  `daemon.port` when the socket is bound. A held daemon lock (for example during
-  `findata migrate`) does not prove a daemon is serving, and a `daemon.port` left by a crash
-  could point a client, and its credential, at another program on that port.
+- **Running jobs do not yet drain on shutdown.** `sandbox-link` and `history` jobs run on daemon
+  threads that end immediately when the process exits; a stop between Plaid's public-token
+  exchange and the local commit could leave an unstored Item at Plaid. Clean job shutdown is
+  designed in `docs/superpowers/specs/2026-11-17-job-shutdown-design.md`.
+- **Only macOS on Apple silicon is supported and tested in CI for now (`bc84000`).** Cross-platform
+  code paths remain in the tree, with two known gaps if Linux, Intel Macs or Windows are
+  re-enabled later:
+  - **Linux and Windows have no presence check yet.** Web grants and approvals are refused there;
+    terminal grants are not confirmed by the user, so an agent with a shell as the user could
+    read `credentials/cli.token` or run `findata grant` and give itself writes unless sandboxed.
+  - **Windows event streams and lock detection fail (`ceb01fc`).** Windows falls back to loopback
+    TCP (`daemon.port`) protected only by data-dir ACLs, its event-stream/lock tests failed and
+    hung in CI, and a stale `daemon.port` alongside a lock held by `findata migrate` has a
+    residual TOCTOU risk.
 - **One loose or unreadable credential file stops that role.** A `credentials/<role>.token`
   readable by other users, or empty or corrupt, makes that front end fail with a clear error
   naming the file: `chmod 600` it, or delete it and run `findata init`.

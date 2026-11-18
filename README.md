@@ -13,7 +13,7 @@ Requires a Mac with Apple silicon and [uv](https://docs.astral.sh/uv/) (it insta
 for you if needed). Linux, Intel Macs and Windows are not supported for now.
 
 ```bash
-uv sync
+uv sync                      # see docs/DEV_SETUP.txt 7b if cloned in a synced ~/Desktop folder
 cp .env.example .env         # add PLAID_CLIENT_ID and PLAID_SECRET (Sandbox)
 uv run findata init          # creates ~/.findata (key, database, credentials), all owner-only
 uv run findata start         # run the daemon in this terminal (Ctrl+C stops it)
@@ -30,9 +30,10 @@ In the second terminal:
 
 ```bash
 uv run findata sandbox-link  # links First Platypus Bank test data, no browser needed
+uv run findata sync          # pull new/changed/removed transactions for linked banks
 uv run findata txns          # print recent transactions
 uv run findata items list    # linked banks; `items rm <id>` revokes at Plaid + deletes locally
-uv run findata status        # the daemon's version, Plaid environment and uptime
+uv run findata status        # daemon version, Plaid env, schema, uptime and user presence
 uv run findata serve web     # web UI; prints a link to open (add --open to open it for you)
 uv run findata serve mcp     # MCP server on stdio, for an AI agent (see below)
 ```
@@ -51,14 +52,17 @@ server config (the exact file depends on the host):
 ```
 
 With `uv run`, use `{"command": "uv", "args": ["run", "--directory", "<path to this repo>",
-"findata", "serve", "mcp"]}`. The daemon must be running. The agent can read items, accounts and
-transactions straight away. It cannot change anything until you allow it.
+"findata", "serve", "mcp"]}`. The daemon must be running. The agent gets four read tools straight
+away (`get_status`, `list_items`, `list_accounts`, and `list_transactions` with `start`, `end`,
+`account_id`, `category`, `limit`, `offset`) and two write tools (`sync` and `remove_item`) that
+stay off until you allow them.
 
 ## Agent access
 
 The agent connects with its own credential and the role `mcp`, which is read-only. Writes (the
-`sync` tool and the `remove_item` tool) are off until you turn them on, for a limited time.
-`remove_item` needs `--ops items.remove` and, as below, an approval for each removal.
+`sync` tool and the `remove_item` tool; `--ops link` also gates the daemon's link routes) are off
+until you turn them on, for a limited time. `remove_item` needs `--ops items.remove` and, as
+below, an approval for each removal.
 
 Turn them on from a terminal:
 
@@ -75,12 +79,13 @@ findata audit                                    # who asked for what, and wheth
   request id, and you run `findata approve <id>`. Then the agent asks again with that id.
 - The web UI has an "Agent access" panel that does the same: grant, revoke and approve.
 
-**Touch ID.** The daemon asks for Touch ID (or your password) before it creates a grant,
+**Touch ID.** The daemon asks for Touch ID (or your login password) before it creates a grant,
 approves a request, or removes an Item for you. Read the prompt. It says what you are allowing,
-and a touch without reading approves it. Where the check is not available,
-grants and approvals from the web UI are refused. Do them from a terminal. There, an
-agent that can run shell commands as you could also grant itself writes, so run such agents
-sandboxed (see ADR 0004, Residual limits).
+and a touch without reading approves it. If the macOS session cannot show the prompt (for example
+over SSH), the daemon refuses with `USER_PRESENCE_REQUIRED` in both the terminal and the web UI;
+run it from a logged-in session at the Mac. (On platforms without a presence check, which are not
+supported today, web grants and approvals are refused while terminal commands proceed; see
+[ADR 0004](docs/adr/0004-daemon-centred-architecture.md), Residual limits.)
 
 **What the agent sees when refused.** A write without a grant fails with `WRITE_NOT_GRANTED` and
 a message that tells it to ask you to run `findata grant mcp-write --ops <operation>`. Nothing is
@@ -111,8 +116,9 @@ Plaid ◀──────────────▶ daemon (findata start) �
   (`DaemonClient`), and a test fails if they import the database, key or Plaid code.
 - **Roles.** `cli` and `web` act for you. `mcp` is the agent. Each has its own credential file in
   `~/.findata/credentials/`, readable only by you.
-- **Events, not polling.** The daemon pushes events (a sync finished, a grant expired) over a
-  stream, so nothing checks on a timer. After a bank is linked, the daemon checks Plaid every 5
+- **Events, not polling.** The daemon pushes events (a sync finished, a grant expired) over an
+  NDJSON stream (up to 32 open streams, with `mcp` capped at 8 so an agent cannot starve human
+  clients), so nothing checks on a timer. After a bank is linked, the daemon checks Plaid every 5
   seconds for up to 2 minutes until the history has loaded; Plaid only pushes through webhooks,
   which need a public address.
 - **Sync** follows Plaid's cursor pattern: page until `has_more` is false, restart from the
@@ -137,12 +143,15 @@ uv run ruff check . && uv run ruff format --check .
 uvx pre-commit install       # optional: ruff + private-key detection on commit
 ```
 
-Tests use a fake Plaid gateway, so they need no keys or network access.
+Tests use a fake Plaid gateway, so they need no keys or network access. Full developer setup,
+configuration and code layout are in [docs/DEV_SETUP.txt](docs/DEV_SETUP.txt); contributor and
+agent workflow conventions are in [AGENTS.md](AGENTS.md).
 
 ## Roadmap
 
 - [x] Alembic migrations (`findata migrate`, backup before changing an existing DB)
 - [x] Daemon that owns the data, with a web UI and an MCP server as front ends
+- [ ] Cleanly stop or drain running jobs on daemon shutdown ([draft design](docs/superpowers/specs/2026-11-17-job-shutdown-design.md))
 - [ ] Scheduled sync and webhooks, balance refresh (next; they run inside the daemon)
 - [ ] Webhook relay so Plaid can reach the daemon. This is a separate decision, because it sends
       Item metadata to a second party.

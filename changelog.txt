@@ -85,6 +85,8 @@ f68a483  2026-11-17  [fix/job-ids-hex]  Job ids are token_hex(8) (16 hex charact
 a8ad291  2026-11-17  [main]  Merge fix/job-ids-hex into main: hex job ids that never start with a dash.
 3f945a4  2026-11-17  [fix/cli-serve-hints]  Update stale `findata serve` hints in `sandbox-link` and `sync` to `findata serve web`, with CLI test assertions.
 b8731f0  2026-11-17  [main]  Merge fix/cli-serve-hints into main: point CLI web UI hints at `findata serve web`.
+3c18863  2026-11-17  [design/job-shutdown]  Add M4 design spec (2026-11-17-job-shutdown-design.md): cancel history waits on shutdown, drain active Plaid write steps within 30 s, and save tokens before item_get with rollback on save failure.
+666e96b  2026-11-17  [main]  Merge design/job-shutdown into main: M4 design for stopping running jobs cleanly on daemon shutdown.
 
 Uncommitted changes: none.
-Branch notes: design/job-shutdown adds the M4 design spec (docs/superpowers/specs/2026-11-17-job-shutdown-design.md) for stopping running jobs cleanly on daemon shutdown.
+Branch notes: docs/refresh-docs aligns README, DEV_SETUP, AGENTS.md, .env.example, ADRs 0001-0004 and the 2026-10-21 daemon spec/plan with the merged macOS-only daemon codebase.

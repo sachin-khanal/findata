@@ -1,6 +1,6 @@
 # ADR 0001: Local-first storage and secret handling
 
-- **Status:** Accepted. Token encryption and key storage superseded by [ADR 0002](0002-layered-encryption-at-rest.md)
+- **Status:** Accepted. Partially superseded: token encryption and key storage by [ADR 0002](0002-layered-encryption-at-rest.md), schema migrations by [ADR 0003](0003-alembic-migrations.md), and the in-process local API and custom token header by [ADR 0004](0004-daemon-centred-architecture.md).
 - **Date:** 2026-09-23
 
 ## Context
