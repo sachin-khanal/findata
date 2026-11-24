@@ -134,8 +134,8 @@ _PRESENCE_ERROR = (
 )
 
 
-# The page's token can be read by any local process, so the browser may not act without a real
-# check: where the platform has none, the web role is refused (the CLI is not).
+# A browser session is weaker than a terminal at hand, so the browser may not act without a
+# real check: where the platform has none, the web role is refused (the CLI is not).
 _WEB_UNSUPPORTED = (
     "This needs a check at the computer, which this platform does not have yet. Use "
     "`findata grant mcp-write` or `findata approve <id>` in a terminal instead."

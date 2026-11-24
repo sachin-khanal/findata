@@ -125,6 +125,12 @@ def test_rejects_foreign_host_header(d, settings):
     assert c.get("/api/health").status_code == 400
 
 
+@pytest.mark.parametrize("base_url", ["http://[::1]:8765", "http://[::1]"])
+def test_accepts_ipv6_loopback_host_header(d, settings, base_url):
+    c = TestClient(make_app(d, settings), base_url=base_url)
+    assert c.get("/api/health").status_code == 200
+
+
 def test_index_fills_the_environment_and_no_credential(client, auth):
     html = client.get("/").text
     assert auth[KEY_HEADER] not in html and "__FINDATA_TOKEN__" not in html

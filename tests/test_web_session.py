@@ -159,6 +159,7 @@ def test_sessions_pair_must_be_minted_together():
     assert not s.valid(None, a[1]) and not s.valid(a[0], None) and not s.valid("", "")
     assert s.start("nope") is None
     assert s.launch_url("127.0.0.1", 8765) == f"http://127.0.0.1:8765/#launch={secret}"
+    assert s.launch_url("::1", 8765) == f"http://[::1]:8765/#launch={secret}"
 
 
 @posix_only
@@ -237,6 +238,34 @@ def test_serve_web_prints_the_launch_link_and_open_opens_it(settings, monkeypatc
     link = built["app"].state.sessions.launch_url("127.0.0.1", 8765)
     assert f"Open findata: {link}" in r.output
     assert opened == [link]
+
+
+def test_serve_web_brackets_ipv6_loopback_host(settings, monkeypatch):
+    from typer.testing import CliRunner
+
+    from findata import cli
+    from findata.web import app as web_app
+
+    monkeypatch.setenv("FINDATA_DATA_DIR", str(settings.data_dir))
+    monkeypatch.setenv("FINDATA_HOST", "::1")
+    built: dict = {}
+
+    class FakeServer:
+        def __init__(self, app, on_listening=None, **config):
+            built.update(app=app, config=config)
+            self.on_listening = on_listening
+
+        def run(self):
+            self.on_listening()
+
+    monkeypatch.setattr(web_app, "WebServer", FakeServer)
+
+    r = CliRunner().invoke(cli.app, ["serve", "web"])
+    assert r.exit_code == 0, r.output
+    link = built["app"].state.sessions.launch_url("::1", 8765)
+    assert link.startswith("http://[::1]:8765/#launch=")
+    assert "findata web → http://[::1]:8765" in r.stdout
+    assert f"Open findata: {link}" in r.stdout
 
 
 @pytest.mark.parametrize(
