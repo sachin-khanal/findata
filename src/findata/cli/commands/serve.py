@@ -28,7 +28,7 @@ def web(
     from findata.client import DaemonClient
     from findata.locations import ClientSettings
     from findata.web.app import WebServer, create_web_app
-    from findata.web.session import WebSessions
+    from findata.web.session import WebSessions, http_origin
 
     s = ClientSettings()
     if s.findata_host not in LOOPBACK_HOSTS:
@@ -42,7 +42,7 @@ def web(
     sessions = WebSessions()
     link = sessions.launch_url(s.findata_host, s.findata_port)
     typer.echo(
-        f"findata web → http://{s.findata_host}:{s.findata_port} (the daemon must be running)"
+        f"findata web → {http_origin(s.findata_host, s.findata_port)} (the daemon must be running)"
     )
 
     def listening() -> None:

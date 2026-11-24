@@ -21,6 +21,12 @@ COOKIE_NAME = "findata_session"
 KEY_HEADER = "X-Findata-Session"
 
 
+def http_origin(host: str, port: int) -> str:
+    """`http://<host>:<port>`, bracketing IPv6 literals as RFC 3986 requires."""
+    bracketed = f"[{host}]" if ":" in host and not host.startswith("[") else host
+    return f"http://{bracketed}:{port}"
+
+
 class WebSessions:
     def __init__(self) -> None:
         self._launch_secret = secrets.token_urlsafe(32)
@@ -28,7 +34,7 @@ class WebSessions:
         self._lock = threading.Lock()
 
     def launch_url(self, host: str, port: int) -> str:
-        return f"http://{host}:{port}/#launch={self._launch_secret}"
+        return f"{http_origin(host, port)}/#launch={self._launch_secret}"
 
     def start(self, secret: str) -> tuple[str, str] | None:
         """A new (session id, request key) if `secret` is the launch secret, else None."""

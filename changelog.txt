@@ -89,6 +89,8 @@ b8731f0  2026-11-17  [main]  Merge fix/cli-serve-hints into main: point CLI web 
 666e96b  2026-11-17  [main]  Merge design/job-shutdown into main: M4 design for stopping running jobs cleanly on daemon shutdown.
 c25af29  2026-11-17  [docs/refresh-docs]  Refresh README, DEV_SETUP, AGENTS.md, .env.example, ADRs 0001-0004 and the 2026-10-21 daemon spec/plan (MCP tools, macOS SSH presence refusal, stream caps, full module layout, worktree note archiving).
 270f91d  2026-11-17  [main]  Merge docs/refresh-docs into main: refreshed README, DEV_SETUP, AGENTS.md, ADRs and daemon spec/plan.
+df75ac5  2026-11-23  [docs/changelog-sync]  Add changelog entries for c25af29 and 270f91d.
+78b9c43  2026-11-23  [main]  Merge docs/changelog-sync into main: changelog entries for the docs refresh; main pushed to origin.
 
-Uncommitted changes: changelog.txt (entries for c25af29 and 270f91d).
-Branch notes: main is 8 commits ahead of origin/main (fix/job-ids-hex, fix/cli-serve-hints, design/job-shutdown, docs/refresh-docs and their merges; merged local branches deleted, daemon worktree notes archived in ~/.findata-notes/2026-10-21-daemon-architecture/); macOS on Apple silicon is the only supported platform for now; M4 job shutdown is designed in docs/superpowers/specs/2026-11-17-job-shutdown-design.md and not implemented yet.
+Uncommitted changes: changelog.txt (entries for df75ac5 and 78b9c43).
+Branch notes: main matches origin/main at 78b9c43 (no other local branches or worktrees); macOS on Apple silicon is the only supported platform for now; M4 job shutdown is designed in docs/superpowers/specs/2026-11-17-job-shutdown-design.md and not implemented yet.

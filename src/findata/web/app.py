@@ -76,7 +76,7 @@ def create_web_app(client: DaemonClient, sessions: WebSessions | None = None) ->
     app.state.sessions = sessions or WebSessions()
     app.state.stopping = asyncio.Event()  # set as shutdown begins: open event relays end
     # Blocks DNS-rebinding attacks against the localhost server.
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "[::1]"])
 
     @app.exception_handler(BrowserSessionRequired)
     async def _no_session(_: Request, __: BrowserSessionRequired) -> JSONResponse:

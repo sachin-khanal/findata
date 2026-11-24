@@ -131,7 +131,7 @@ Plaid ◀──────────────▶ daemon (findata start) �
 - **Web UI.** `findata serve web` prints a launch link such as `http://127.0.0.1:8765/#launch=...`.
   Opening it starts a browser session (an HttpOnly cookie plus a per-session key kept in the
   page's storage; nothing on disk). The page itself holds no credential. Restarting
-  `serve web` ends all sessions. The server accepts only `localhost`/`127.0.0.1` Host headers.
+  `serve web` ends all sessions. The server accepts only `localhost`/`127.0.0.1`/`[::1]` Host headers.
 - **Money** is stored and returned as exact decimal strings. Plaid's sign convention applies:
   positive = money out, negative = money in.
 
